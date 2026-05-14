@@ -21,6 +21,12 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 # Import the WebSocket client
 from .zerodha_websocket import ZerodhaWebSocket
 
+# SkyShieldEdge patch: bypass eventlet monkey-patching for primitives that cross
+# OS-thread boundaries. The asyncio WS proxy thread (spawned via
+# eventlet.patcher.original("threading") in app_integration.py) and the
+# eventlet hub thread both touch self.lock and self.batch_timer. eventlet's
+# Semaphore (which Lock becomes after monkey-patching) is not OS-thread-safe
+# and crashes with greenlet.error: Cannot switch to a different thread.
 if "eventlet" in sys.modules:
     import eventlet
 
