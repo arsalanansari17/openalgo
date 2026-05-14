@@ -183,7 +183,7 @@ def track_latency(api_type):
                     request_body=None,  # Not storing to save database space
                     response_body=None,  # Not storing to save database space
                     status="SUCCESS" if status_code < 400 else "FAILED",
-                    error=response_data.get("message") if status_code >= 400 else None,
+                    error=str(response_data.get("message")) if status_code >= 400 else None,
                 )
 
                 return response

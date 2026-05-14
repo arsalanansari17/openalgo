@@ -1347,69 +1347,38 @@ class WebSocketProxy:
         """
         Handle cache invalidation messages from Flask process.
 
-        When a user re-authenticates or logs out, Flask publishes a cache invalidation
-        message via ZeroMQ. This method clears the local auth caches so that the next
-        request fetches fresh data from the database.
+        Flask already cleared the shared in-process caches (auth_cache,
+        verified_api_key_cache, etc.) before publishing this ZMQ message —
+        see auth_db.py upsert_auth(). The WS proxy runs in the same process
+        so those module-level TTLCache objects are already up to date.
 
-        This solves the stale token issue described in GitHub issue #765.
+        Calling .clear() on eventlet-monkey-patched TTLCache objects from
+        this asyncio thread (a real OS thread) causes a cross-thread
+        greenlet.error: Cannot switch to a different thread — the TTLCache
+        internal RLock is eventlet-patched and not OS-thread-safe. Repeating
+        the clear here is both redundant and harmful.
+
+        The only job for the WS proxy on a cache invalidation is to
+        disconnect any stale broker adapter so it re-authenticates on the
+        next WS connection (fresh credentials from the now-cleared DB cache).
 
         Args:
             topic_str: The ZMQ topic (format: CACHE_INVALIDATE_{TYPE}_{USER_ID})
             data_str: JSON string with invalidation details
         """
         try:
-            # Import caches locally to avoid circular imports
-            from database.auth_db import (
-                auth_cache,
-                broker_cache,
-                feed_token_cache,
-                invalid_api_key_cache,
-                verified_api_key_cache,
-            )
-
             # Parse the invalidation message
             message = json.loads(data_str)
             user_id = message.get("user_id")
-            cache_type = message.get("cache_type", "ALL")
 
             if not user_id:
                 logger.warning("Cache invalidation message missing user_id")
                 return
 
-            logger.info(f"Received cache invalidation for user: {user_id}, type: {cache_type}")
+            logger.info(f"Received cache invalidation for user: {user_id}, type: {message.get('cache_type', 'ALL')}")
 
-            # CRITICAL: Clear ALL cache entries to prevent stale token issues
-            # This is necessary because get_auth_token_broker() uses a different cache key format
-            # (sha256(api_key)_include_feed_token) than the user-id based keys.
-            # Without clearing all entries, old cached tokens would persist and cause
-            # 401 Unauthorized errors after re-login.
-            # See GitHub issue #851 for details on this cache key mismatch bug.
-            caches_cleared = []
-
-            if cache_type in ("AUTH", "ALL"):
-                auth_cache.clear()
-                caches_cleared.append("auth_cache")
-
-            if cache_type in ("FEED", "ALL"):
-                feed_token_cache.clear()
-                caches_cleared.append("feed_token_cache")
-
-            if cache_type == "ALL":
-                broker_cache.clear()
-                caches_cleared.append("broker_cache")
-
-                verified_api_key_cache.clear()
-                invalid_api_key_cache.clear()
-                caches_cleared.append("verified_api_key_cache")
-                caches_cleared.append("invalid_api_key_cache")
-
-            if caches_cleared:
-                logger.info(f"Cleared caches for user {user_id}: {', '.join(caches_cleared)}")
-            else:
-                logger.debug(f"No cached data found for user {user_id}")
-
-            # Also disconnect and clean up any existing broker adapters for this user
-            # This forces re-initialization with fresh credentials on next connection
+            # Disconnect stale broker adapter so the next WS connection
+            # re-initialises with fresh credentials from the database.
             if user_id in self.broker_adapters:
                 try:
                     adapter = self.broker_adapters[user_id]
