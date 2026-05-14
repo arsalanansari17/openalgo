@@ -21,12 +21,14 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 # Import the WebSocket client
 from .zerodha_websocket import ZerodhaWebSocket
 
-# SkyShieldEdge patch: bypass eventlet monkey-patching for primitives that cross
-# OS-thread boundaries. The asyncio WS proxy thread (spawned via
-# eventlet.patcher.original("threading") in app_integration.py) and the
-# eventlet hub thread both touch self.lock and self.batch_timer. eventlet's
-# Semaphore (which Lock becomes after monkey-patching) is not OS-thread-safe
-# and crashes with greenlet.error: Cannot switch to a different thread.
+# SkyShieldEdge patch (#1421): self.lock is acquired from both the asyncio WS
+# proxy thread (via adapter.subscribe() called from server.subscribe_client())
+# and the eventlet hub thread (via the batch timer callback). eventlet's
+# monkey-patched threading.Lock is its Semaphore, which is not OS-thread-safe
+# and crashes with greenlet.error: Cannot switch to a different thread when
+# its waiter wake-up fires across thread boundaries. Use a real OS mutex for
+# self.lock only — Timer/Thread stay as eventlet primitives because the
+# WebSocket library inside their callbacks needs the eventlet hub for I/O.
 if "eventlet" in sys.modules:
     import eventlet
     _real_threading = eventlet.patcher.original("threading")
@@ -166,7 +168,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.batch_timer:
             self.batch_timer.cancel()
 
-        self.batch_timer = _real_threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
         self.batch_timer.start()
 
     def _process_batch_subscriptions(self):
