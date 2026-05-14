@@ -18,6 +18,7 @@ Implements:
 import json
 import ssl
 import struct
+import sys
 import threading
 import time
 from collections import deque
@@ -26,6 +27,19 @@ from datetime import datetime
 from typing import Any
 
 import websocket
+
+# SkyShieldEdge patch: bypass eventlet monkey-patching for primitives that
+# cross OS-thread boundaries. See zerodha_adapter.py for the full rationale —
+# self.lock is acquired from both the asyncio WS proxy thread and the eventlet
+# hub thread, and threading.Lock under eventlet is its non-thread-safe
+# Semaphore which crashes with greenlet.error: Cannot switch to a different
+# thread. Threads/Events/Timers held on this object likewise need to live
+# outside eventlet's hub.
+if "eventlet" in sys.modules:
+    import eventlet
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 
 class ZerodhaWebSocket:
@@ -77,7 +91,7 @@ class ZerodhaWebSocket:
         self.running = False
         self._ws_thread: threading.Thread | None = None
         self.logger = get_logger(__name__)
-        self.lock = threading.Lock()
+        self.lock = _real_threading.Lock()
 
         # Subscription management
         self.subscribed_tokens: set[int] = set()
@@ -116,8 +130,8 @@ class ZerodhaWebSocket:
         self.error_count = 0
 
         # Connection state
-        self._connection_ready = threading.Event()
-        self._stop_event = threading.Event()
+        self._connection_ready = _real_threading.Event()
+        self._stop_event = _real_threading.Event()
 
         # Fatal-error short-circuit: when an auth failure is detected (expired
         # token, invalid api_key, 3am IST roll-over, etc.) we stop reconnecting
@@ -150,7 +164,7 @@ class ZerodhaWebSocket:
             self._fatal_error = False
             self._fatal_error_message = ""
 
-            self._ws_thread = threading.Thread(
+            self._ws_thread = _real_threading.Thread(
                 target=self._run_websocket, daemon=True, name="ZerodhaWS"
             )
             self._ws_thread.start()
@@ -268,7 +282,7 @@ class ZerodhaWebSocket:
 
         # Process subscriptions in a separate thread
         if not self._subscription_thread or not self._subscription_thread.is_alive():
-            self._subscription_thread = threading.Thread(
+            self._subscription_thread = _real_threading.Thread(
                 target=self._process_pending_subscriptions, daemon=True
             )
             self._subscription_thread.start()
@@ -517,7 +531,7 @@ class ZerodhaWebSocket:
     def _start_health_check(self):
         if self._health_check_thread and self._health_check_thread.is_alive():
             return
-        self._health_check_thread = threading.Thread(
+        self._health_check_thread = _real_threading.Thread(
             target=self._health_check_loop, daemon=True
         )
         self._health_check_thread.start()
