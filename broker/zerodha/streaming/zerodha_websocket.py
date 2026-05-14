@@ -30,6 +30,13 @@ import websocket
 
 from database.auth_db import get_auth_token
 
+# SkyShieldEdge patch: bypass eventlet monkey-patching for primitives that
+# cross OS-thread boundaries. See zerodha_adapter.py for the full rationale —
+# self.lock is acquired from both the asyncio WS proxy thread and the eventlet
+# hub thread, and threading.Lock under eventlet is its non-thread-safe
+# Semaphore which crashes with greenlet.error: Cannot switch to a different
+# thread. Threads/Events/Timers held on this object likewise need to live
+# outside eventlet's hub.
 if "eventlet" in sys.modules:
     import eventlet
 
