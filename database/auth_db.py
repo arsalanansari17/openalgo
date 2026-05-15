@@ -934,6 +934,59 @@ def get_broker_name(provided_api_key):
     return None
 
 
+def verify_api_key_no_cache(provided_api_key):
+    """Verify API key directly against DB without touching any TTLCache.
+
+    TTLCache uses threading.RLock internally. Under eventlet that lock is
+    monkey-patched to an eventlet Semaphore. Acquiring it from a real OS
+    thread (the asyncio WS proxy) while a Flask greenlet holds the same
+    lock causes greenlet.error. Use this variant from any non-greenlet
+    context (see GitHub issue #1421).
+    """
+    import hashlib
+    peppered_key = provided_api_key + PEPPER
+    try:
+        api_keys = ApiKeys.query.all()
+        for api_key_obj in api_keys:
+            try:
+                ph.verify(api_key_obj.api_key_hash, peppered_key)
+                return api_key_obj.user_id
+            except VerifyMismatchError:
+                continue
+        return None
+    except Exception as e:
+        logger.exception(f"Error verifying API key (no-cache): {e}")
+        return None
+
+
+def get_broker_name_no_cache(user_id):
+    """Get broker name directly from DB without touching any TTLCache.
+    See verify_api_key_no_cache for why this is needed from the WS proxy.
+    """
+    if not user_id:
+        return None
+    try:
+        auth_obj = Auth.query.filter_by(name=user_id).first()
+        if auth_obj and not auth_obj.is_revoked:
+            return auth_obj.broker
+        return None
+    except Exception as e:
+        logger.exception(f"Error querying broker name (no-cache): {e}")
+        return None
+
+
+def get_auth_token_no_cache(name):
+    """Get decrypted auth token directly from DB without touching any TTLCache.
+    See verify_api_key_no_cache for why this is needed from the WS proxy.
+    """
+    if not name:
+        return None
+    auth_obj = get_auth_token_dbquery(name)
+    if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
+        return decrypt_token(auth_obj.auth)
+    return None
+
+
 def get_auth_token_broker(provided_api_key, include_feed_token=False):
     """
     Get auth token, feed token (optional) and broker for a valid API key with caching.

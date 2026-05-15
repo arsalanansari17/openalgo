@@ -14,7 +14,7 @@ import zmq.asyncio
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-from database.auth_db import get_broker_name, verify_api_key
+from database.auth_db import get_broker_name_no_cache, verify_api_key_no_cache
 from services.market_data_service import get_market_data_service
 from utils.logging import get_logger, highlight_url
 
@@ -612,8 +612,6 @@ class WebSocketProxy:
         try:
             from sqlalchemy import text
 
-            from database.auth_db import get_broker_name
-
             # Get user's connected broker from database
             # This queries the auth_token table to find the user's active broker
             query = text("""
@@ -688,7 +686,9 @@ class WebSocketProxy:
             return
 
         # Verify the API key and get the user ID
-        user_id = verify_api_key(api_key)
+        # Use no-cache variant: TTLCache uses threading.RLock (monkey-patched to eventlet
+        # Semaphore); acquiring from this asyncio OS thread causes greenlet.error (#1421).
+        user_id = verify_api_key_no_cache(api_key)
 
         if not user_id:
             await self.send_error(client_id, "AUTHENTICATION_ERROR", "Invalid API key")
@@ -697,8 +697,8 @@ class WebSocketProxy:
         # Store the user mapping
         self.user_mapping[client_id] = user_id
 
-        # Get broker name
-        broker_name = get_broker_name(api_key)
+        # Get broker name — no-cache variant for same reason as above
+        broker_name = get_broker_name_no_cache(user_id)
 
         if not broker_name:
             await self.send_error(
@@ -1431,37 +1431,16 @@ class WebSocketProxy:
         Called when detecting stale credentials (e.g., 403 error from broker).
         See GitHub issue #765 for details.
 
-        Args:
-            user_id: The user's ID
+        NOTE: We intentionally do NOT touch the shared module-level TTLCache objects
+        (auth_cache, broker_cache, feed_token_cache) from this method. Those caches
+        use threading.RLock internally, which eventlet monkey-patches to a Semaphore.
+        Acquiring that Semaphore from the asyncio OS thread causes greenlet.error
+        (Cannot switch to a different thread) when a Flask greenlet is concurrently
+        waiting on the same lock. Flask's upsert_auth() already clears these shared
+        caches before publishing the ZMQ invalidation message.
         """
-        try:
-            from database.auth_db import (
-                auth_cache,
-                broker_cache,
-                feed_token_cache,
-            )
-
-            cache_key_auth = f"auth-{user_id}"
-            cache_key_feed = f"feed-{user_id}"
-
-            caches_cleared = []
-            if cache_key_auth in auth_cache:
-                del auth_cache[cache_key_auth]
-                caches_cleared.append("auth_cache")
-            if cache_key_feed in feed_token_cache:
-                del feed_token_cache[cache_key_feed]
-                caches_cleared.append("feed_token_cache")
-            if cache_key_auth in broker_cache:
-                del broker_cache[cache_key_auth]
-                caches_cleared.append("broker_cache")
-
-            if caches_cleared:
-                logger.info(f"Cleared auth caches for user {user_id}: {', '.join(caches_cleared)}")
-            else:
-                logger.debug(f"No cached auth data found for user {user_id}")
-
-        except Exception as e:
-            logger.exception(f"Error clearing auth cache for user {user_id}: {e}")
+        logger.debug(f"Skipping shared TTLCache clear for user {user_id} "
+                     f"(unsafe from asyncio thread — Flask upsert_auth handles this)")
 
     async def zmq_listener(self):
         """

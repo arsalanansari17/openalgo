@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from database.auth_db import get_auth_token
+from database.auth_db import get_auth_token_no_cache
 from database.token_db import get_token
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
@@ -91,8 +91,9 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.api_key:
                 return {"status": "error", "message": "API key not found in environment variables"}
 
-            # Get auth token from database
-            auth_token = get_auth_token(user_id)
+            # Get auth token from database — no-cache variant avoids touching
+            # TTLCache's monkey-patched RLock from this asyncio OS thread (#1421).
+            auth_token = get_auth_token_no_cache(user_id)
             if not auth_token:
                 return {"status": "error", "message": "Authentication token not found"}
 
