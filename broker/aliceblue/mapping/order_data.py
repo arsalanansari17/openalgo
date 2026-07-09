@@ -570,6 +570,7 @@ def transform_holdings_data(holdings_data):
                 "t1_quantity": huqty if holdqty > 0 else 0,
                 "pledged_quantity": collateral_qty,
                 "product": holdings.get("Pcode", "CNC"),
+                "ltp": ltp,
                 "pnl": pnl,  # Rounded to two decimals
                 "pnlpercent": pnlpercent,  # Rounded to two decimals
             }

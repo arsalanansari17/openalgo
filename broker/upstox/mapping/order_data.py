@@ -215,6 +215,7 @@ def transform_holdings_data(holdings_data):
             "t1_quantity": holdings.get("t1_quantity", 0),
             "pledged_quantity": holdings.get("collateral_quantity", 0),
             "product": holdings.get("product", ""),
+            "ltp": holdings.get("last_price", 0.0),
             "pnl": holdings.get("pnl", 0.0),
             "pnlpercent": (holdings.get("last_price", 0) - holdings.get("average_price", 0.0))
             / holdings.get("average_price", 0.0)
