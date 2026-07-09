@@ -92,4 +92,51 @@ as-is).
 - `uv run ruff check` — no new lint errors introduced (pre-existing unused-variable/whitespace/deprecated-typing warnings in touched files are unrelated to this patch).
 - `uv run pytest test/` — 407 passed, no regressions. Remaining failures/errors (mstock live-credential-gated tests, async-test config issues, eventlet-dependent websocket tests) are pre-existing and reproduce identically on `main`.
 - Frontend (`npm run build`) compiles cleanly with the new `Holding` fields and table columns.
-- **Pending:** live comparison against Kite Console for the Zerodha acc1 account (needs a real pledged holding + browser check — a manual step).
+- **Verified in production 2026-07-09/10:** deployed to acc1, user confirmed pledged quantities display correctly on real holdings.
+
+---
+
+## 2026-07-10 — Holdings LTP always showing "-"
+
+**Branch:** `main-sync-2026-07-09` (same deploy line as the pledge/T1 fix above)
+
+### Problem
+
+Holdings page LTP column showed `-` for every row (not just pledged ones).
+Root cause: several brokers' `transform_holdings_data` never copied the
+broker's raw last-traded-price field into the unified `ltp` output key —
+it was either unused entirely or only read internally for a P&L%
+calculation, never exposed on the transformed row. The frontend's
+`useLivePrice` hook falls back to this REST-provided `ltp` outside the
+window where live WebSocket/MultiQuotes data is flowing (e.g. after
+market close), so with no REST fallback value, LTP had nothing to show.
+
+### Fix
+
+Checked all 17 non-Zerodha brokers patched in the fix above (Zerodha
+itself: `holdings.get("last_price")` → `ltp`, fixed 2026-07-09 as part of
+frontend redesign work). Of the remaining 17:
+
+**Fixed — broker provides the raw field, it just wasn't mapped:**
+
+| Broker | Raw field | Notes |
+|---|---|---|
+| angel | `ltp` | Confirmed present in SmartAPI `getAllHolding` schema. |
+| aliceblue | `Ltp` (normalized from raw `ltp`) | Already computed as a local var in `transform_holdings_data`, just never put in the output dict. |
+| upstox | `last_price` | Already used for the `pnlpercent` calc in the same function. |
+| groww | `last_price` | Already extracted by `api/order_api.py::get_holdings` into the raw dict. |
+| mstock | `ltp` | Confirmed via mStock Type B docs (mirrors Angel SmartAPI). |
+| samco | *(derived)* | No direct price field in the raw response — derived as `holdingsValue / (quantity + pledged_quantity)`, both already-trusted fields used elsewhere in the same function. Not a guess at an unconfirmed raw field name. |
+
+**Not fixed — broker genuinely doesn't provide LTP in the holdings response (confirmed via existing code comments or already-stubbed P&L, not assumed):**
+- **definedge** — explicit comment: "Definedge doesn't provide LTP in holdings."
+- **flattrade, zebu, tradesmart** — same Noren/Shoonya-family API; Flattrade has an explicit comment confirming the endpoint doesn't return LTP, and Zebu/TradeSmart's `pnl`/`pnlpercent` are correspondingly either broker-precomputed with no local price use or hardcoded `0.0` — same platform, same limitation.
+- **motilal** — explicit comment: "P&L calculation would need current LTP, which is not in holdings response."
+- **dhan_sandbox** — the real `dhan` adapter gets live pricing via a multiquote-fetch-and-enrich step in its own `map_portfolio_data` (sets a `_ltp` key); `dhan_sandbox`'s `map_portfolio_data` is a much simpler stub with no such enrichment. Fixing this means porting that enrichment logic, not a one-line field-name fix — bigger lift, deferred.
+
+### Verification
+
+- Synthetic per-broker checks for all 6 fixes (angel, aliceblue, upstox, groww, mstock, samco) — `ltp` populates correctly in each.
+- `uv run ruff check` — no new lint errors (pre-existing unused-variable warnings in unrelated code, same as before).
+- `uv run pytest test/` — 407 passed, identical to the pre-change baseline, no regressions.
+- Not live-verified against real accounts for these 6 (only have a Zerodha account) — flag in the eventual upstream PR same as the pledge/T1 fields.
