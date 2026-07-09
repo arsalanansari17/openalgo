@@ -9,6 +9,7 @@ import {
   Pause,
   Radio,
   RefreshCw,
+  Search,
   Settings2,
   TrendingDown,
   TrendingUp,
@@ -40,6 +41,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -169,6 +171,7 @@ export default function Positions() {
   const [sortColumn, setSortColumn] = useState<SortColumn>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
   // Automatically pauses when tab is hidden
@@ -307,6 +310,7 @@ export default function Positions() {
 
   // Filter positions (use enhancedPositions for real-time LTP/PnL)
   const filteredPositions = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
     return enhancedPositions.filter((pos) => {
       if (filters.product.length > 0 && !filters.product.includes(pos.product)) return false
 
@@ -322,9 +326,11 @@ export default function Positions() {
 
       if (filters.exchange.length > 0 && !filters.exchange.includes(pos.exchange)) return false
 
+      if (query && !pos.symbol.toLowerCase().includes(query)) return false
+
       return true
     })
-  }, [enhancedPositions, filters])
+  }, [enhancedPositions, filters, searchQuery])
 
   // Sort positions
   const sortedPositions = useMemo(() => {
@@ -420,6 +426,7 @@ export default function Positions() {
     setFilters({ product: [], direction: [], exchange: [] })
     setGrouping('none')
     setCollapsedGroups(new Set())
+    setSearchQuery('')
   }
 
   const toggleGroup = (groupKey: string) => {
@@ -438,7 +445,8 @@ export default function Positions() {
     filters.product.length > 0 ||
     filters.direction.length > 0 ||
     filters.exchange.length > 0 ||
-    grouping !== 'none'
+    grouping !== 'none' ||
+    searchQuery.trim() !== ''
 
   const handleClosePosition = async (position: Position) => {
     try {
@@ -814,6 +822,11 @@ export default function Positions() {
               {v}
             </Badge>
           ))}
+          {searchQuery.trim() !== '' && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              Search: {searchQuery}
+            </Badge>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -863,6 +876,27 @@ export default function Positions() {
       {/* Positions Table */}
       <Card>
         <CardContent className="py-0">
+          <div className="pt-3 pb-4 flex justify-end">
+            <div className="relative max-w-xs w-full">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search symbol..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 pr-8"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin" />
