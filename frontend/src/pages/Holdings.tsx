@@ -375,7 +375,7 @@ export default function Holdings() {
         'Quantity',
         'T1 Qty',
         'Pledged Qty',
-        'Avg Price',
+        'Avg. Price',
         'LTP',
         'Invested',
         'Current',
@@ -618,7 +618,7 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total PnL</CardDescription>
+            <CardDescription>Total P&L</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
@@ -644,7 +644,7 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total PnL %</CardDescription>
+            <CardDescription>Total P&L %</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
@@ -726,13 +726,13 @@ export default function Holdings() {
                     {/* T1/Pledged no longer get their own columns - folded into the
                         Quantity cell via formatQuantity()'s "0 T1:12 P:5" display. */}
                     <SortableHeader column="quantity" label="Quantity" className="text-right" />
-                    <SortableHeader column="average_price" label="Avg Price" className="text-right" />
+                    <SortableHeader column="average_price" label="Avg. Price" className="text-right" />
                     <SortableHeader column="ltp" label="LTP" className="text-right" />
                     <TableHead>Product</TableHead>
                     <SortableHeader column="invested" label="Invested" className="text-right" />
                     <SortableHeader column="current" label="Current" className="text-right" />
-                    <SortableHeader column="pnl" label="PnL" className="text-right" />
-                    <SortableHeader column="pnlpercent" label="PnL %" className="text-right" />
+                    <SortableHeader column="pnl" label="P&L" className="text-right" />
+                    <SortableHeader column="pnlpercent" label="P&L %" className="text-right" />
                     <SortableHeader column="allocation" label="Allocation" className="text-right" />
                     <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
