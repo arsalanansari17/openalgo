@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ArrowUpDown,
   Download,
   Loader2,
   Pause,
@@ -38,6 +39,32 @@ function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
+/** Free + T1 + pledged — the total held quantity, not just the freely-sellable portion. */
+function totalQty(holding: Holding): number {
+  return (holding.quantity || 0) + (holding.t1_quantity || 0) + (holding.pledged_quantity || 0)
+}
+
+/** Zerodha-style compact quantity: "0 T1:12 P:5" — omits T1/P entirely when zero. */
+function formatQuantity(holding: Holding): string {
+  const parts = [String(holding.quantity)]
+  if (holding.t1_quantity) parts.push(`T1:${holding.t1_quantity}`)
+  if (holding.pledged_quantity) parts.push(`P:${holding.pledged_quantity}`)
+  return parts.join(' ')
+}
+
+type SortColumn =
+  | 'symbol'
+  | 'quantity'
+  | 'average_price'
+  | 'ltp'
+  | 'invested'
+  | 'current'
+  | 'pnl'
+  | 'pnlpercent'
+  | 'allocation'
+  | null
+type SortDirection = 'asc' | 'desc'
+
 export default function Holdings() {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
@@ -47,6 +74,8 @@ export default function Holdings() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showStaleWarning, setShowStaleWarning] = useState(false)
+  const [sortColumn, setSortColumn] = useState<SortColumn>(null)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
@@ -81,6 +110,94 @@ export default function Holdings() {
     // Recalculate stats with real-time data
     return calculateLiveStats(enhancedHoldings, stats)
   }, [stats, enhancedHoldings])
+
+  // Derive per-row Invested/Current/Allocation from the live-priced holdings.
+  // Invested and Current both use total quantity (free + T1 + pledged) since
+  // pledged/T1 shares are still part of what you own and what you paid for them.
+  const rows = useMemo(() => {
+    const withValues = enhancedHoldings.map((holding) => {
+      const qty = totalQty(holding)
+      const ltp = holding.ltp ?? holding.average_price ?? 0
+      return {
+        ...holding,
+        invested: qty * (holding.average_price || 0),
+        current: qty * ltp,
+      }
+    })
+    const totalCurrent = withValues.reduce((sum, h) => sum + h.current, 0)
+    return withValues.map((holding) => ({
+      ...holding,
+      allocation: totalCurrent > 0 ? (holding.current / totalCurrent) * 100 : 0,
+    }))
+  }, [enhancedHoldings])
+
+  const sortedRows = useMemo(() => {
+    if (sortColumn === null) return rows
+
+    return [...rows].sort((a, b) => {
+      let aVal: string | number
+      let bVal: string | number
+
+      switch (sortColumn) {
+        case 'symbol':
+          aVal = a.symbol
+          bVal = b.symbol
+          break
+        case 'quantity':
+          aVal = totalQty(a)
+          bVal = totalQty(b)
+          break
+        case 'average_price':
+          aVal = a.average_price || 0
+          bVal = b.average_price || 0
+          break
+        case 'ltp':
+          aVal = a.ltp || 0
+          bVal = b.ltp || 0
+          break
+        case 'invested':
+          aVal = a.invested
+          bVal = b.invested
+          break
+        case 'current':
+          aVal = a.current
+          bVal = b.current
+          break
+        case 'pnl':
+          aVal = a.pnl || 0
+          bVal = b.pnl || 0
+          break
+        case 'pnlpercent':
+          aVal = a.pnlpercent || 0
+          bVal = b.pnlpercent || 0
+          break
+        case 'allocation':
+          aVal = a.allocation
+          bVal = b.allocation
+          break
+        default:
+          return 0
+      }
+
+      if (typeof aVal === 'string') {
+        return sortDirection === 'asc'
+          ? aVal.localeCompare(bVal as string)
+          : (bVal as string).localeCompare(aVal)
+      }
+      return sortDirection === 'asc'
+        ? (aVal as number) - (bVal as number)
+        : (bVal as number) - (aVal as number)
+    })
+  }, [rows, sortColumn, sortDirection])
+
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortColumn(column)
+      setSortDirection('asc')
+    }
+  }
 
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
@@ -155,7 +272,7 @@ export default function Holdings() {
   }, [fetchHoldings])
 
   const exportToCSV = () => {
-    if (enhancedHoldings.length === 0) {
+    if (rows.length === 0) {
       showToast.error('No data to export', 'system')
       return
     }
@@ -163,26 +280,32 @@ export default function Holdings() {
     try {
       const headers = [
         'Symbol',
-        'Exchange',
         'Quantity',
+        'T1 Qty',
+        'Pledged Qty',
         'Avg Price',
         'LTP',
-        'Product',
+        'Invested',
+        'Current',
         'P&L',
         'P&L %',
+        'Allocation %',
       ]
-      const rows = enhancedHoldings.map((h) => [
+      const csvRows = rows.map((h) => [
         sanitizeCSV(h.symbol),
-        sanitizeCSV(h.exchange),
         sanitizeCSV(h.quantity),
+        sanitizeCSV(h.t1_quantity || 0),
+        sanitizeCSV(h.pledged_quantity || 0),
         sanitizeCSV(h.average_price),
         sanitizeCSV(h.ltp),
-        sanitizeCSV(h.product),
+        sanitizeCSV(h.invested),
+        sanitizeCSV(h.current),
         sanitizeCSV(h.pnl),
         sanitizeCSV(h.pnlpercent),
+        sanitizeCSV(h.allocation),
       ])
 
-      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const csv = [headers, ...csvRows].map((row) => row.join(',')).join('\n')
       const blob = new Blob([csv], { type: 'text/csv' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -199,6 +322,31 @@ export default function Holdings() {
   }
 
   const isProfit = (value: number) => value >= 0
+
+  const SortableHeader = ({
+    column,
+    label,
+    className,
+  }: {
+    column: SortColumn
+    label: string
+    className?: string
+  }) => (
+    <TableHead
+      className={cn('cursor-pointer hover:bg-muted/50 select-none', className)}
+      onClick={() => handleSort(column)}
+    >
+      <div
+        className={cn(
+          'flex items-center gap-1 w-full',
+          className?.includes('text-right') && 'justify-end'
+        )}
+      >
+        {label}
+        <ArrowUpDown className="h-3 w-3 opacity-50" />
+      </div>
+    </TableHead>
+  )
 
   return (
     <div className="space-y-6">
@@ -258,17 +406,17 @@ export default function Holdings() {
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total Holding Value</CardDescription>
-            <CardTitle className="text-2xl text-primary">
-              {enhancedStats ? formatCurrency(enhancedStats.totalholdingvalue) : '---'}
+            <CardDescription>Invested</CardDescription>
+            <CardTitle className="text-2xl">
+              {enhancedStats ? formatCurrency(enhancedStats.totalinvvalue) : '---'}
             </CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total Investment Value</CardDescription>
-            <CardTitle className="text-2xl">
-              {enhancedStats ? formatCurrency(enhancedStats.totalinvvalue) : '---'}
+            <CardDescription>Current</CardDescription>
+            <CardTitle className="text-2xl text-primary">
+              {enhancedStats ? formatCurrency(enhancedStats.totalholdingvalue) : '---'}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -335,31 +483,23 @@ export default function Holdings() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Trading Symbol</TableHead>
-                    <TableHead>Exchange</TableHead>
-                    <TableHead className="text-right">Quantity</TableHead>
-                    <TableHead className="text-right">T1 Qty</TableHead>
-                    <TableHead className="text-right">Pledged Qty</TableHead>
-                    <TableHead className="text-right">Avg Price</TableHead>
-                    <TableHead className="text-right">LTP</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead className="text-right">Profit and Loss</TableHead>
-                    <TableHead className="text-right">PnL %</TableHead>
+                    <SortableHeader column="symbol" label="Trading Symbol" />
+                    <SortableHeader column="quantity" label="Quantity" className="text-right" />
+                    <SortableHeader column="average_price" label="Avg Price" className="text-right" />
+                    <SortableHeader column="ltp" label="LTP" className="text-right" />
+                    <SortableHeader column="invested" label="Invested" className="text-right" />
+                    <SortableHeader column="current" label="Current" className="text-right" />
+                    <SortableHeader column="pnl" label="PnL" className="text-right" />
+                    <SortableHeader column="pnlpercent" label="PnL %" className="text-right" />
+                    <SortableHeader column="allocation" label="Allocation" className="text-right" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {enhancedHoldings.map((holding, index) => (
+                  {sortedRows.map((holding, index) => (
                     <TableRow key={`${holding.symbol}-${holding.exchange}-${index}`}>
                       <TableCell className="font-medium">{holding.symbol}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{holding.exchange}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">{holding.quantity}</TableCell>
                       <TableCell className="text-right font-mono">
-                        {holding.t1_quantity ?? 0}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {holding.pledged_quantity ?? 0}
+                        {formatQuantity(holding)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {holding.average_price !== undefined
@@ -369,8 +509,11 @@ export default function Holdings() {
                       <TableCell className="text-right font-mono">
                         {holding.ltp !== undefined ? formatCurrency(holding.ltp) : '-'}
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">{holding.product}</Badge>
+                      <TableCell className="text-right font-mono">
+                        {formatCurrency(holding.invested)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {formatCurrency(holding.current)}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -394,6 +537,9 @@ export default function Holdings() {
                         )}
                       >
                         {formatPercent(holding.pnlpercent)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">
+                        {holding.allocation.toFixed(2)}%
                       </TableCell>
                     </TableRow>
                   ))}
@@ -424,6 +570,9 @@ export default function Holdings() {
                       )}
                     >
                       {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '-'}
+                    </TableCell>
+                    <TableCell className="text-right font-bold text-muted-foreground">
+                      {rows.length > 0 ? '100.00%' : '-'}
                     </TableCell>
                   </TableRow>
                 </TableFooter>
