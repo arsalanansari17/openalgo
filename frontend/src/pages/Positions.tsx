@@ -497,15 +497,19 @@ export default function Positions() {
         'P&L',
         'P&L %',
       ]
+      // sanitizeCSV's formula-injection prefix ('-123 -> '-123) is only needed
+      // for free-text fields; quantity/price/pnl are all genuine numbers from
+      // the broker API, so a plain string conversion avoids a spurious
+      // leading "'" on every negative value while staying just as safe.
       const rows = filteredPositions.map((p) => [
         sanitizeCSV(p.symbol),
         sanitizeCSV(p.exchange),
         ...(isCrypto ? [] : [sanitizeCSV(p.product)]),
-        sanitizeCSV(p.quantity),
-        sanitizeCSV(p.average_price),
-        sanitizeCSV(p.ltp),
-        sanitizeCSV(p.pnl),
-        sanitizeCSV(calculatePnlPercent(p)),
+        String(p.quantity ?? ''),
+        String(p.average_price ?? ''),
+        String(p.ltp ?? ''),
+        String(p.pnl ?? ''),
+        calculatePnlPercent(p).toFixed(2),
       ])
 
       const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
