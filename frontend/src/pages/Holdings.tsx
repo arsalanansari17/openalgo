@@ -662,8 +662,8 @@ export default function Holdings() {
       {/* Holdings Table */}
       <Card>
         <CardContent className="py-0">
-          <div className="py-4">
-            <div className="relative max-w-xs">
+          <div className="py-4 flex justify-end">
+            <div className="relative max-w-xs w-full">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search symbol..."
