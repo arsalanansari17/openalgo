@@ -364,7 +364,7 @@ export default function Holdings() {
         'Quantity',
         'T1 Qty',
         'Pledged Qty',
-        'Avg Price',
+        'Avg. Price',
         'LTP',
         'Invested',
         'Current',
@@ -607,7 +607,7 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total PnL</CardDescription>
+            <CardDescription>Total P&L</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
@@ -633,7 +633,7 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total PnL %</CardDescription>
+            <CardDescription>Total P&L %</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
@@ -712,12 +712,12 @@ export default function Holdings() {
                   <TableRow>
                     <SortableHeader column="symbol" label="Trading Symbol" />
                     <SortableHeader column="quantity" label="Quantity" className="text-right" />
-                    <SortableHeader column="average_price" label="Avg Price" className="text-right" />
+                    <SortableHeader column="average_price" label="Avg. Price" className="text-right" />
                     <SortableHeader column="ltp" label="LTP" className="text-right" />
                     <SortableHeader column="invested" label="Invested" className="text-right" />
                     <SortableHeader column="current" label="Current" className="text-right" />
-                    <SortableHeader column="pnl" label="PnL" className="text-right" />
-                    <SortableHeader column="pnlpercent" label="PnL %" className="text-right" />
+                    <SortableHeader column="pnl" label="P&L" className="text-right" />
+                    <SortableHeader column="pnlpercent" label="P&L %" className="text-right" />
                     <SortableHeader column="allocation" label="Allocation" className="text-right" />
                   </TableRow>
                 </TableHeader>
@@ -774,7 +774,7 @@ export default function Holdings() {
                 <TableFooter>
                   <TableRow className="bg-muted/50">
                     <TableCell colSpan={6} className="text-right text-muted-foreground">
-                      Total PnL:
+                      Total P&L:
                     </TableCell>
                     <TableCell
                       className={cn(
