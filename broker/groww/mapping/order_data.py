@@ -907,6 +907,7 @@ def transform_holdings_data(holdings_data):
             "pledged_quantity": float(holdings.get("pledge_quantity", 0)),
             "average_price": float(holdings.get("average_price", holdings.get("avgPrice", 0))),
             "product": holdings.get("product", "CNC"),
+            "ltp": float(holdings.get("last_price", 0)),
             "pnl": float(holdings.get("pnl", 0)),
             "pnlpercent": float(holdings.get("pnlpercent", 0)),
         }
