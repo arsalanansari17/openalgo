@@ -484,7 +484,7 @@ export default function Holdings() {
                 className="relative"
               >
                 <Settings2 className="h-4 w-4 mr-2" />
-                Settings
+                Filters
                 {hasActiveFilters && (
                   <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
                 )}
@@ -492,7 +492,7 @@ export default function Holdings() {
             </DialogTrigger>
             <DialogContent className="max-w-md">
               <DialogHeader>
-                <DialogTitle>Holdings Settings</DialogTitle>
+                <DialogTitle>Holdings Filters</DialogTitle>
                 <DialogDescription>Configure filters and how portfolio metrics are calculated</DialogDescription>
               </DialogHeader>
 
