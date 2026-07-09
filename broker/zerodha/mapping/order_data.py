@@ -236,6 +236,7 @@ def transform_holdings_data(holdings_data):
             "pledged_quantity": holdings.get("collateral_quantity", 0),
             "product": holdings.get("product", ""),
             "average_price": average_price,
+            "ltp": round(holdings.get("last_price", 0.0), 2),
             "pnl": round(holdings.get("pnl", 0.0), 2),  # Rounded to two decimals
             "pnlpercent": pnlpercent,  # Rounded to two decimals
         }

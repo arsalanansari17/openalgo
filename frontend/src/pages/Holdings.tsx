@@ -6,6 +6,7 @@ import {
   Pause,
   Radio,
   RefreshCw,
+  Settings2,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -16,6 +17,15 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 import {
   Table,
   TableBody,
@@ -74,6 +84,14 @@ type SortColumn =
   | 'allocation'
   | null
 type SortDirection = 'asc' | 'desc'
+type AllocationBasis = 'current' | 'invested'
+
+interface FilterState {
+  hasT1: boolean
+  hasPledged: boolean
+}
+
+const STORAGE_KEY = 'openalgo_holdings_prefs'
 
 export default function Holdings() {
   const { apiKey, user } = useAuthStore()
@@ -87,6 +105,40 @@ export default function Holdings() {
   const [orderIntent, setOrderIntent] = useState<HoldingOrderIntent | null>(null)
   const [sortColumn, setSortColumn] = useState<SortColumn>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [allocationBasis, setAllocationBasis] = useState<AllocationBasis>('current')
+  const [filters, setFilters] = useState<FilterState>({ hasT1: false, hasPledged: false })
+
+  // Load/save preferences from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.allocationBasis === 'current' || parsed.allocationBasis === 'invested') {
+          setAllocationBasis(parsed.allocationBasis)
+        }
+        if (parsed.filters) {
+          setFilters({
+            hasT1: Boolean(parsed.filters.hasT1),
+            hasPledged: Boolean(parsed.filters.hasPledged),
+          })
+        }
+      }
+    } catch {
+      // Ignore malformed saved prefs
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ allocationBasis, filters }))
+  }, [allocationBasis, filters])
+
+  const hasActiveFilters = filters.hasT1 || filters.hasPledged
+  const toggleFilter = (key: keyof FilterState) => {
+    setFilters((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+  const clearFilters = () => setFilters({ hasT1: false, hasPledged: false })
 
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
@@ -135,17 +187,35 @@ export default function Holdings() {
         current: qty * ltp,
       }
     })
-    const totalCurrent = withValues.reduce((sum, h) => sum + h.current, 0)
-    return withValues.map((holding) => ({
-      ...holding,
-      allocation: totalCurrent > 0 ? (holding.current / totalCurrent) * 100 : 0,
-    }))
-  }, [enhancedHoldings])
+    const totalBasis = withValues.reduce(
+      (sum, h) => sum + (allocationBasis === 'invested' ? h.invested : h.current),
+      0
+    )
+    return withValues.map((holding) => {
+      const basisValue = allocationBasis === 'invested' ? holding.invested : holding.current
+      return {
+        ...holding,
+        allocation: totalBasis > 0 ? (basisValue / totalBasis) * 100 : 0,
+      }
+    })
+  }, [enhancedHoldings, allocationBasis])
+
+  // Filtering happens after allocation is computed against the full
+  // portfolio, so a filtered view's percentages still add up meaningfully
+  // against the whole (not just what's currently shown).
+  const filteredRows = useMemo(() => {
+    if (!hasActiveFilters) return rows
+    return rows.filter((h) => {
+      if (filters.hasT1 && (h.t1_quantity || 0) > 0) return true
+      if (filters.hasPledged && (h.pledged_quantity || 0) > 0) return true
+      return false
+    })
+  }, [rows, filters, hasActiveFilters])
 
   const sortedRows = useMemo(() => {
-    if (sortColumn === null) return rows
+    if (sortColumn === null) return filteredRows
 
-    return [...rows].sort((a, b) => {
+    return [...filteredRows].sort((a, b) => {
       let aVal: string | number
       let bVal: string | number
 
@@ -199,7 +269,7 @@ export default function Holdings() {
         ? (aVal as number) - (bVal as number)
         : (bVal as number) - (aVal as number)
     })
-  }, [rows, sortColumn, sortDirection])
+  }, [filteredRows, sortColumn, sortDirection])
 
   const handleSort = (column: SortColumn) => {
     if (sortColumn === column) {
@@ -283,7 +353,7 @@ export default function Holdings() {
   }, [fetchHoldings])
 
   const exportToCSV = () => {
-    if (rows.length === 0) {
+    if (sortedRows.length === 0) {
       showToast.error('No data to export', 'system')
       return
     }
@@ -302,7 +372,7 @@ export default function Holdings() {
         'P&L %',
         'Allocation %',
       ]
-      const csvRows = rows.map((h) => [
+      const csvRows = sortedRows.map((h) => [
         sanitizeCSV(h.symbol),
         sanitizeCSV(h.quantity),
         sanitizeCSV(h.t1_quantity || 0),
@@ -397,6 +467,110 @@ export default function Holdings() {
           <p className="text-muted-foreground">View your holdings portfolio</p>
         </div>
         <div className="flex items-center gap-2">
+          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant={hasActiveFilters ? 'default' : 'outline'}
+                size="sm"
+                className="relative"
+              >
+                <Settings2 className="h-4 w-4 mr-2" />
+                Settings
+                {hasActiveFilters && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                )}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Holdings Settings</DialogTitle>
+                <DialogDescription>Configure filters and how portfolio metrics are calculated</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-6 py-4">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Filters
+                    </Label>
+                    {hasActiveFilters && (
+                      <Button variant="ghost" size="sm" className="h-auto p-0 text-xs" onClick={clearFilters}>
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    {[
+                      { key: 'hasT1' as const, label: 'Has T1 Quantity' },
+                      { key: 'hasPledged' as const, label: 'Has Pledged Quantity' },
+                    ].map((opt) => (
+                      <label
+                        key={opt.key}
+                        className={cn(
+                          'flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-muted',
+                          filters[opt.key] && 'bg-primary/10 border border-primary/30'
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={filters[opt.key]}
+                          onChange={() => toggleFilter(opt.key)}
+                          className="accent-primary"
+                        />
+                        <span className={cn(filters[opt.key] && 'text-primary font-semibold')}>
+                          {opt.label}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Selecting both shows holdings matching either.
+                  </p>
+                </div>
+
+                <div className="border-t" />
+
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Allocation Basis
+                  </Label>
+                  <div className="space-y-2">
+                    {[
+                      { value: 'current', label: 'Current Value', hint: 'Weight by market value today (qty × LTP)' },
+                      { value: 'invested', label: 'Invested Value', hint: 'Weight by cost basis (qty × avg price)' },
+                    ].map((opt) => (
+                      <label
+                        key={opt.value}
+                        className={cn(
+                          'flex items-start gap-3 cursor-pointer p-2 rounded hover:bg-muted',
+                          allocationBasis === opt.value && 'bg-primary/10 border border-primary/30'
+                        )}
+                      >
+                        <input
+                          type="radio"
+                          name="allocationBasis"
+                          checked={allocationBasis === opt.value}
+                          onChange={() => setAllocationBasis(opt.value as AllocationBasis)}
+                          className="accent-primary mt-1"
+                        />
+                        <span>
+                          <span
+                            className={cn(
+                              'block',
+                              allocationBasis === opt.value && 'text-primary font-semibold'
+                            )}
+                          >
+                            {opt.label}
+                          </span>
+                          <span className="text-xs text-muted-foreground">{opt.hint}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
           <Button
             variant="outline"
             size="sm"
@@ -433,7 +607,7 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total Profit and Loss</CardDescription>
+            <CardDescription>Total PnL</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
@@ -459,7 +633,7 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total PnL Percentage</CardDescription>
+            <CardDescription>Total PnL %</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
@@ -468,7 +642,18 @@ export default function Holdings() {
                   : 'text-red-600'
               )}
             >
-              {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '---'}
+              {enhancedStats ? (
+                <div className="flex items-center gap-1">
+                  {isProfit(enhancedStats.totalpnlpercentage) ? (
+                    <TrendingUp className="h-5 w-5" />
+                  ) : (
+                    <TrendingDown className="h-5 w-5" />
+                  )}
+                  {formatPercent(enhancedStats.totalpnlpercentage)}
+                </div>
+              ) : (
+                '---'
+              )}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -488,6 +673,12 @@ export default function Holdings() {
               icon={Wallet}
               title="No holdings found"
               description="Connect a broker to start tracking your portfolio."
+            />
+          ) : filteredRows.length === 0 ? (
+            <EmptyState
+              icon={Wallet}
+              title="No holdings match the current filters"
+              description="Adjust or clear the filters in Settings to see your holdings."
             />
           ) : (
             <div className="overflow-x-auto">
