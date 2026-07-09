@@ -55,7 +55,7 @@ describe('Navigation Config', () => {
     it('contains remaining nav items', () => {
       const sheetLabels = mobileSheetItems.map((item) => item.label)
       expect(sheetLabels).toContain('Action Center')
-      expect(sheetLabels).toContain('Platforms')
+      expect(sheetLabels).toContain('Holdings')
       expect(sheetLabels).toContain('Logs')
     })
   })
@@ -65,7 +65,7 @@ describe('Navigation Config', () => {
       const labels = profileMenuItems.map((item) => item.label)
       expect(labels).toContain('Profile')
       expect(labels).toContain('API Key')
-      expect(labels).toContain('Holdings')
+      expect(labels).toContain('Platforms')
     })
   })
 
