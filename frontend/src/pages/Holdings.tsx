@@ -23,6 +23,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -497,39 +498,29 @@ export default function Holdings() {
 
               <div className="space-y-6 py-4">
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Filters
-                    </Label>
-                    {hasActiveFilters && (
-                      <Button variant="ghost" size="sm" className="h-auto p-0 text-xs" onClick={clearFilters}>
-                        Clear
-                      </Button>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    {[
-                      { key: 'hasT1' as const, label: 'Has T1 Quantity' },
-                      { key: 'hasPledged' as const, label: 'Has Pledged Quantity' },
-                    ].map((opt) => (
-                      <label
-                        key={opt.key}
-                        className={cn(
-                          'flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-muted',
-                          filters[opt.key] && 'bg-primary/10 border border-primary/30'
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={filters[opt.key]}
-                          onChange={() => toggleFilter(opt.key)}
-                          className="accent-primary"
-                        />
-                        <span className={cn(filters[opt.key] && 'text-primary font-semibold')}>
-                          {opt.label}
-                        </span>
-                      </label>
-                    ))}
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Filters
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant={filters.hasT1 ? 'default' : 'outline'}
+                      size="sm"
+                      className={cn('rounded-full', filters.hasT1 && 'bg-pink-500 hover:bg-pink-600')}
+                      onClick={() => toggleFilter('hasT1')}
+                    >
+                      Has T1 Quantity
+                    </Button>
+                    <Button
+                      variant={filters.hasPledged ? 'default' : 'outline'}
+                      size="sm"
+                      className={cn(
+                        'rounded-full',
+                        filters.hasPledged && 'bg-pink-500 hover:bg-pink-600'
+                      )}
+                      onClick={() => toggleFilter('hasPledged')}
+                    >
+                      Has Pledged Quantity
+                    </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
                     Selecting both shows holdings matching either.
@@ -542,41 +533,39 @@ export default function Holdings() {
                   <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Allocation Basis
                   </Label>
-                  <div className="space-y-2">
+                  <div className="flex flex-wrap gap-2">
                     {[
-                      { value: 'current', label: 'Current Value', hint: 'Weight by market value today (qty × LTP)' },
-                      { value: 'invested', label: 'Invested Value', hint: 'Weight by cost basis (qty × avg price)' },
+                      { value: 'current', label: 'Current Value' },
+                      { value: 'invested', label: 'Invested Value' },
                     ].map((opt) => (
-                      <label
+                      <Button
                         key={opt.value}
+                        variant={allocationBasis === opt.value ? 'default' : 'outline'}
+                        size="sm"
                         className={cn(
-                          'flex items-start gap-3 cursor-pointer p-2 rounded hover:bg-muted',
-                          allocationBasis === opt.value && 'bg-primary/10 border border-primary/30'
+                          'rounded-full',
+                          allocationBasis === opt.value && 'bg-pink-500 hover:bg-pink-600'
                         )}
+                        onClick={() => setAllocationBasis(opt.value as AllocationBasis)}
                       >
-                        <input
-                          type="radio"
-                          name="allocationBasis"
-                          checked={allocationBasis === opt.value}
-                          onChange={() => setAllocationBasis(opt.value as AllocationBasis)}
-                          className="accent-primary mt-1"
-                        />
-                        <span>
-                          <span
-                            className={cn(
-                              'block',
-                              allocationBasis === opt.value && 'text-primary font-semibold'
-                            )}
-                          >
-                            {opt.label}
-                          </span>
-                          <span className="text-xs text-muted-foreground">{opt.hint}</span>
-                        </span>
-                      </label>
+                        {opt.label}
+                      </Button>
                     ))}
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    {allocationBasis === 'current'
+                      ? 'Weight by market value today (qty × LTP).'
+                      : 'Weight by cost basis (qty × avg. price).'}
+                  </p>
                 </div>
               </div>
+
+              <DialogFooter>
+                <Button variant="ghost" onClick={clearFilters}>
+                  Clear All
+                </Button>
+                <Button onClick={() => setSettingsOpen(false)}>Done</Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
           <Button
