@@ -387,6 +387,7 @@ def transform_holdings_data(holdings_data):
             "symbol": holding.get("tradingSymbol", ""),
             "exchange": holding.get("exchange", "NSE"),
             "quantity": quantity,
+            "pledged_quantity": int(holding.get("collateralQuantity", 0) or 0),
             "product": holding.get("product", "CNC"),
             "pnl": round(pnl, 2),
             "pnlpercent": pnl_percent,
