@@ -138,11 +138,14 @@ export default function Holdings() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ allocationBasis, filters }))
   }, [allocationBasis, filters])
 
-  const hasActiveFilters = filters.hasT1 || filters.hasPledged
+  const hasActiveFilters = filters.hasT1 || filters.hasPledged || searchQuery.trim() !== ''
   const toggleFilter = (key: keyof FilterState) => {
     setFilters((prev) => ({ ...prev, [key]: !prev[key] }))
   }
-  const clearFilters = () => setFilters({ hasT1: false, hasPledged: false })
+  const clearFilters = () => {
+    setFilters({ hasT1: false, hasPledged: false })
+    setSearchQuery('')
+  }
 
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
@@ -383,18 +386,23 @@ export default function Holdings() {
         'P&L %',
         'Allocation %',
       ]
+      // sanitizeCSV's formula-injection prefix ('-123 -> '-123) is only needed
+      // for free-text fields; these are all genuine numbers from the broker
+      // API, so a plain string conversion avoids a spurious leading "'" on
+      // every negative value while staying just as safe (a JS number can
+      // never contain a formula payload).
       const csvRows = sortedRows.map((h) => [
         sanitizeCSV(h.symbol),
-        sanitizeCSV(h.quantity),
-        sanitizeCSV(h.t1_quantity || 0),
-        sanitizeCSV(h.pledged_quantity || 0),
-        sanitizeCSV(h.average_price),
-        sanitizeCSV(h.ltp),
-        sanitizeCSV(h.invested),
-        sanitizeCSV(h.current),
-        sanitizeCSV(h.pnl),
-        sanitizeCSV(h.pnlpercent),
-        sanitizeCSV(h.allocation),
+        String(h.quantity ?? ''),
+        String(h.t1_quantity || 0),
+        String(h.pledged_quantity || 0),
+        String(h.average_price ?? ''),
+        String(h.ltp ?? ''),
+        String(h.invested ?? ''),
+        String(h.current ?? ''),
+        String(h.pnl ?? ''),
+        (h.pnlpercent ?? 0).toFixed(2),
+        String(h.allocation ?? ''),
       ])
 
       const csv = [headers, ...csvRows].map((row) => row.join(',')).join('\n')
@@ -597,6 +605,36 @@ export default function Holdings() {
           </Button>
         </div>
       </div>
+
+      {/* Active Filters Bar */}
+      {hasActiveFilters && (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm text-muted-foreground">Active Filters:</span>
+          {filters.hasT1 && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              Has T1 Quantity
+            </Badge>
+          )}
+          {filters.hasPledged && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              Has Pledged Quantity
+            </Badge>
+          )}
+          {searchQuery.trim() !== '' && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              Search: {searchQuery}
+            </Badge>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-red-500 border-red-500/50 hover:bg-red-500/10"
+            onClick={clearFilters}
+          >
+            Clear All
+          </Button>
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-4">
