@@ -6,10 +6,12 @@ import {
   Pause,
   Radio,
   RefreshCw,
+  Search,
   Settings2,
   TrendingDown,
   TrendingUp,
   Wallet,
+  X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
@@ -25,6 +27,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -108,6 +111,7 @@ export default function Holdings() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [allocationBasis, setAllocationBasis] = useState<AllocationBasis>('current')
   const [filters, setFilters] = useState<FilterState>({ hasT1: false, hasPledged: false })
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Load/save preferences from localStorage
   useEffect(() => {
@@ -204,13 +208,20 @@ export default function Holdings() {
   // portfolio, so a filtered view's percentages still add up meaningfully
   // against the whole (not just what's currently shown).
   const filteredRows = useMemo(() => {
-    if (!hasActiveFilters) return rows
-    return rows.filter((h) => {
-      if (filters.hasT1 && (h.t1_quantity || 0) > 0) return true
-      if (filters.hasPledged && (h.pledged_quantity || 0) > 0) return true
-      return false
-    })
-  }, [rows, filters, hasActiveFilters])
+    let result = rows
+    if (hasActiveFilters) {
+      result = result.filter((h) => {
+        if (filters.hasT1 && (h.t1_quantity || 0) > 0) return true
+        if (filters.hasPledged && (h.pledged_quantity || 0) > 0) return true
+        return false
+      })
+    }
+    const query = searchQuery.trim().toLowerCase()
+    if (query) {
+      result = result.filter((h) => h.symbol.toLowerCase().includes(query))
+    }
+    return result
+  }, [rows, filters, hasActiveFilters, searchQuery])
 
   const sortedRows = useMemo(() => {
     if (sortColumn === null) return filteredRows
@@ -662,6 +673,27 @@ export default function Holdings() {
       {/* Holdings Table */}
       <Card>
         <CardContent className="py-0">
+          <div className="py-4">
+            <div className="relative max-w-xs">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search symbol..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 pr-8"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin" />
@@ -677,8 +709,12 @@ export default function Holdings() {
           ) : filteredRows.length === 0 ? (
             <EmptyState
               icon={Wallet}
-              title="No holdings match the current filters"
-              description="Adjust or clear the filters in Settings to see your holdings."
+              title="No holdings match"
+              description={
+                searchQuery
+                  ? `No symbol matches "${searchQuery}". Try a different search or clear the filters in Settings.`
+                  : 'Adjust or clear the filters in Settings to see your holdings.'
+              }
             />
           ) : (
             <div className="overflow-x-auto">

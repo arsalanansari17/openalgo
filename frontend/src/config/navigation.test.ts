@@ -10,7 +10,7 @@ import {
 describe('Navigation Config', () => {
   describe('navItems', () => {
     it('contains the expected main navigation items', () => {
-      expect(navItems).toHaveLength(9)
+      expect(navItems).toHaveLength(10)
 
       const labels = navItems.map((item) => item.label)
       expect(labels).toContain('Dashboard')
@@ -19,6 +19,8 @@ describe('Navigation Config', () => {
       expect(labels).toContain('Positions')
       expect(labels).toContain('Strategy')
       expect(labels).toContain('Trading')
+      expect(labels).toContain('Holdings')
+      expect(labels).toContain('Action Center')
     })
 
     it('all items have required properties', () => {
@@ -56,7 +58,8 @@ describe('Navigation Config', () => {
     it('contains remaining nav items', () => {
       const sheetLabels = mobileSheetItems.map((item) => item.label)
       expect(sheetLabels).toContain('Trading')
-      expect(sheetLabels).toContain('Platforms')
+      expect(sheetLabels).toContain('Holdings')
+      expect(sheetLabels).toContain('Action Center')
       expect(sheetLabels).toContain('Logs')
     })
   })
@@ -66,9 +69,15 @@ describe('Navigation Config', () => {
       const labels = profileMenuItems.map((item) => item.label)
       expect(labels).toContain('Profile')
       expect(labels).toContain('API Key')
-      expect(labels).toContain('Holdings')
-      // Action Center moved from the main navbar into the profile dropdown,
-      // positioned right after API Key.
+      // Platforms stays in the profile dropdown (settings/integration page,
+      // not a daily-use view) - Holdings was promoted out to the main navbar
+      // instead, so it's asserted absent here, not present.
+      expect(labels).toContain('Platforms')
+      expect(labels).not.toContain('Holdings')
+      // Action Center appears in both navItems (primary nav) and here
+      // (profile dropdown) - kept in both rather than picking one, since
+      // dropping it from the dropdown wasn't part of either change being
+      // merged. Position right after API Key is preserved from before.
       expect(labels).toContain('Action Center')
       expect(labels.indexOf('Action Center')).toBe(labels.indexOf('API Key') + 1)
     })
