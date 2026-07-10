@@ -145,10 +145,10 @@ frontend redesign work). Of the remaining 17:
 
 ## 2026-07-10 — Zerodha margin() undersells required funds for pre-trade sizing
 
-**Branch:** `bugfix/zerodha-margin-premium-credit` (cherry-picked onto `main-sync-2026-07-09` as `78e41a3b`)
+**Branch:** `bugfix/zerodha-margin-premium-credit` (cherry-picked onto `main-sync-2026-07-09` as `78e41a3b`, follow-up fix as `1a82410e`)
 **Upstream issue:** [marketcalls/openalgo#1620](https://github.com/marketcalls/openalgo/issues/1620)
 **Upstream PR:** [marketcalls/openalgo#1621](https://github.com/marketcalls/openalgo/pull/1621)
-**Verified in production:** _not yet — pending acc2 (paper) then acc1 (live) deploy_
+**Verified in production:** yes — deployed to acc1 and acc2, sanity-check lot sizing confirmed using `initial_total_margin` on both
 
 ### Problem
 
@@ -174,10 +174,9 @@ existing meaning (see below).
 
 ### Fix
 
-Purely additive — `total_margin_required` unchanged, two new fields added:
+Purely additive — `total_margin_required` unchanged, one new field added:
 
 - `initial_total_margin` — the pre-premium-credit total (`initial.total`)
-- `option_premium_credit` — the credit `final.total` already netted out
 
 Non-basket (single/aggregated order) responses have no initial/final split,
 so `initial_total_margin` falls back to `total_margin_required` in that path.
@@ -187,18 +186,35 @@ so `initial_total_margin` falls back to `total_margin_required` in that path.
 — that changes behavior for existing consumers of the field platform-wide;
 left as a maintainer decision, noted in the PR.
 
-**Still pending (separate change, SkyShieldAT repo, after this deploys):**
-`_compute_lot_multiplier()` in `iron_condor.py` and `intraday_ironfly.py`
-needs to switch from `total_margin_required` to `initial_total_margin` for
-sizing. Not part of this OpenAlgo-side patch.
+**`option_premium_credit` field — added then removed (`1a82410e`):** the
+initial version of this patch also added `option_premium_credit` (sourced
+from `final.option_premium`). `cubic-dev-ai`'s automated review on the PR
+flagged that this can come back negative and suggested sourcing it from
+`initial.option_premium` instead. Checked against a real production basket
+margin response and found neither raw sub-field actually equals "the
+credit" — the real credit is the *delta* between `initial.option_premium`
+and `final.option_premium` (span/exposure barely move between initial and
+final for these strategies, so nearly the entire optimization benefit
+shows up as the option_premium component swinging sign). Computing that
+delta would just restate `margin_benefit` under a new name, so the field
+was dropped entirely rather than "fixed" — `initial_total_margin` (the
+field that actually drives sizing) was unaffected throughout.
+
+**Done (SkyShieldAT repo, separate commits):** `_compute_lot_multiplier()`
+in `iron_condor.py` and `intraday_ironfly.py` switched from
+`total_margin_required` to `initial_total_margin` for sizing;
+`sanity_check.py`'s dry-run preview updated to match.
 
 ### Verification
 
-- New `test/test_zerodha_margin_api.py` — 3 tests (basket response, non-basket
+- `test/test_zerodha_margin_api.py` — 3 tests (basket response, non-basket
   fallback, error passthrough). All pass.
 - `uv run pytest test/test_zerodha_margin_api.py test/test_dhan_margin_api.py -v`
   — 8/8 pass, no regressions in sibling Dhan margin tests.
 - `uv run ruff check` / `uv run ruff format --check` — clean.
-- Cherry-picked onto `main-sync-2026-07-09` (`78e41a3b`) with no conflicts.
-- Not yet live-verified — deploy to acc2 (analyzer/paper mode) planned first,
-  then acc1 once confirmed.
+- Cherry-picked onto `main-sync-2026-07-09` (`78e41a3b`, `1a82410e`) with no
+  conflicts.
+- Live-verified on both acc1 and acc2: sanity-check lot sizing (IronCondor
+  and IntradayIronFly, NIFTY and SENSEX) computed lower, more conservative
+  lot counts using `initial_total_margin` on both accounts, matching
+  expected values.
