@@ -140,3 +140,65 @@ frontend redesign work). Of the remaining 17:
 - `uv run ruff check` — no new lint errors (pre-existing unused-variable warnings in unrelated code, same as before).
 - `uv run pytest test/` — 407 passed, identical to the pre-change baseline, no regressions.
 - Not live-verified against real accounts for these 6 (only have a Zerodha account) — flag in the eventual upstream PR same as the pledge/T1 fields.
+
+---
+
+## 2026-07-10 — Zerodha margin() undersells required funds for pre-trade sizing
+
+**Branch:** `bugfix/zerodha-margin-premium-credit` (cherry-picked onto `main-sync-2026-07-09` as `78e41a3b`)
+**Upstream issue:** [marketcalls/openalgo#1620](https://github.com/marketcalls/openalgo/issues/1620)
+**Upstream PR:** [marketcalls/openalgo#1621](https://github.com/marketcalls/openalgo/pull/1621)
+**Verified in production:** _not yet — pending acc2 (paper) then acc1 (live) deploy_
+
+### Problem
+
+`IntradayIronFly` sized a 4-leg NIFTY iron fly using `client.margin()` on a
+single lot and linearly scaled the lot count. The estimate (~68,339/lot) was
+16% below what Zerodha actually required at order time (~79,287/lot),
+causing a live entry rejection (`Insufficient funds`) mid-basket, requiring
+a rollback of the already-filled legs.
+
+Root cause: `parse_margin_response()` in
+`broker/zerodha/mapping/margin_data.py` only returns Zerodha's `final.total`
+as `total_margin_required` — a figure that already nets out the option
+premium collected from the short legs. That premium isn't actually
+available until the sell orders fill, so pre-trade sizing off it is
+optimistic by roughly the premium amount.
+
+Note: Shoonya, Flattrade, and Firstock's margin mappings each have
+comments claiming Zerodha's `total_margin_required` maps to the
+conservative `initial.total` figure — it doesn't (it uses `final.total`).
+Those three brokers already behave conservatively; Zerodha is the outlier.
+Flagged for maintainers in the PR rather than changing `total_margin_required`'s
+existing meaning (see below).
+
+### Fix
+
+Purely additive — `total_margin_required` unchanged, two new fields added:
+
+- `initial_total_margin` — the pre-premium-credit total (`initial.total`)
+- `option_premium_credit` — the credit `final.total` already netted out
+
+Non-basket (single/aggregated order) responses have no initial/final split,
+so `initial_total_margin` falls back to `total_margin_required` in that path.
+
+**Deliberately not done:** changing `total_margin_required` itself to
+`initial.total` (which would match Shoonya/Flattrade/Firstock's convention)
+— that changes behavior for existing consumers of the field platform-wide;
+left as a maintainer decision, noted in the PR.
+
+**Still pending (separate change, SkyShieldAT repo, after this deploys):**
+`_compute_lot_multiplier()` in `iron_condor.py` and `intraday_ironfly.py`
+needs to switch from `total_margin_required` to `initial_total_margin` for
+sizing. Not part of this OpenAlgo-side patch.
+
+### Verification
+
+- New `test/test_zerodha_margin_api.py` — 3 tests (basket response, non-basket
+  fallback, error passthrough). All pass.
+- `uv run pytest test/test_zerodha_margin_api.py test/test_dhan_margin_api.py -v`
+  — 8/8 pass, no regressions in sibling Dhan margin tests.
+- `uv run ruff check` / `uv run ruff format --check` — clean.
+- Cherry-picked onto `main-sync-2026-07-09` (`78e41a3b`) with no conflicts.
+- Not yet live-verified — deploy to acc2 (analyzer/paper mode) planned first,
+  then acc1 once confirmed.
