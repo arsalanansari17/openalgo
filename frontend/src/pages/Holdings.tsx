@@ -75,6 +75,7 @@ type SortColumn =
   | 'current'
   | 'pnl'
   | 'pnlpercent'
+  | 'day_change_percent'
   | 'allocation'
   | null
 type SortDirection = 'asc' | 'desc'
@@ -255,6 +256,10 @@ export default function Holdings() {
         case 'pnlpercent':
           aVal = a.pnlpercent || 0
           bVal = b.pnlpercent || 0
+          break
+        case 'day_change_percent':
+          aVal = a.day_change_percent ?? 0
+          bVal = b.day_change_percent ?? 0
           break
         case 'allocation':
           aVal = a.allocation
@@ -634,6 +639,49 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
+            <CardDescription>Day's P&L</CardDescription>
+            <CardTitle
+              className={cn(
+                'text-2xl',
+                enhancedStats && enhancedStats.totaldaypnl !== undefined
+                  ? isProfit(enhancedStats.totaldaypnl)
+                    ? 'text-green-600'
+                    : 'text-red-600'
+                  : ''
+              )}
+            >
+              {enhancedStats && enhancedStats.totaldaypnl !== undefined ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    {isProfit(enhancedStats.totaldaypnl) ? (
+                      <TrendingUp className="h-5 w-5" />
+                    ) : (
+                      <TrendingDown className="h-5 w-5" />
+                    )}
+                    {formatCurrency(enhancedStats.totaldaypnl)}
+                  </div>
+                  {enhancedStats.totaldaypnlpercentage !== undefined && (
+                    <Badge
+                      variant="secondary"
+                      className={cn(
+                        'text-xs',
+                        isProfit(enhancedStats.totaldaypnlpercentage)
+                          ? 'bg-green-500/10 text-green-600'
+                          : 'bg-red-500/10 text-red-600'
+                      )}
+                    >
+                      {formatPercent(enhancedStats.totaldaypnlpercentage)}
+                    </Badge>
+                  )}
+                </div>
+              ) : (
+                '---'
+              )}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
             <CardDescription>Total P&L</CardDescription>
             <CardTitle
               className={cn(
@@ -644,39 +692,26 @@ export default function Holdings() {
               )}
             >
               {enhancedStats ? (
-                <div className="flex items-center gap-1">
-                  {isProfit(enhancedStats.totalprofitandloss) ? (
-                    <TrendingUp className="h-5 w-5" />
-                  ) : (
-                    <TrendingDown className="h-5 w-5" />
-                  )}
-                  {formatCurrency(enhancedStats.totalprofitandloss)}
-                </div>
-              ) : (
-                '---'
-              )}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Total P&L %</CardDescription>
-            <CardTitle
-              className={cn(
-                'text-2xl',
-                enhancedStats && isProfit(enhancedStats.totalpnlpercentage)
-                  ? 'text-green-600'
-                  : 'text-red-600'
-              )}
-            >
-              {enhancedStats ? (
-                <div className="flex items-center gap-1">
-                  {isProfit(enhancedStats.totalpnlpercentage) ? (
-                    <TrendingUp className="h-5 w-5" />
-                  ) : (
-                    <TrendingDown className="h-5 w-5" />
-                  )}
-                  {formatPercent(enhancedStats.totalpnlpercentage)}
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    {isProfit(enhancedStats.totalprofitandloss) ? (
+                      <TrendingUp className="h-5 w-5" />
+                    ) : (
+                      <TrendingDown className="h-5 w-5" />
+                    )}
+                    {formatCurrency(enhancedStats.totalprofitandloss)}
+                  </div>
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      'text-xs',
+                      isProfit(enhancedStats.totalpnlpercentage)
+                        ? 'bg-green-500/10 text-green-600'
+                        : 'bg-red-500/10 text-red-600'
+                    )}
+                  >
+                    {formatPercent(enhancedStats.totalpnlpercentage)}
+                  </Badge>
                 </div>
               ) : (
                 '---'
@@ -745,6 +780,11 @@ export default function Holdings() {
                     <SortableHeader column="current" label="Current" className="text-right" />
                     <SortableHeader column="pnl" label="P&L" className="text-right" />
                     <SortableHeader column="pnlpercent" label="P&L %" className="text-right" />
+                    <SortableHeader
+                      column="day_change_percent"
+                      label="Day Chg %"
+                      className="text-right"
+                    />
                     <SortableHeader column="allocation" label="Allocation" className="text-right" />
                   </TableRow>
                 </TableHeader>
@@ -792,6 +832,20 @@ export default function Holdings() {
                       >
                         {formatPercent(holding.pnlpercent)}
                       </TableCell>
+                      <TableCell
+                        className={cn(
+                          'text-right',
+                          holding.day_change_percent === undefined
+                            ? 'text-muted-foreground'
+                            : isProfit(holding.day_change_percent)
+                              ? 'text-green-600'
+                              : 'text-red-600'
+                        )}
+                      >
+                        {holding.day_change_percent !== undefined
+                          ? formatPercent(holding.day_change_percent)
+                          : '-'}
+                      </TableCell>
                       <TableCell className="text-right font-mono text-muted-foreground">
                         {holding.allocation.toFixed(2)}%
                       </TableCell>
@@ -800,8 +854,14 @@ export default function Holdings() {
                 </TableBody>
                 <TableFooter>
                   <TableRow className="bg-muted/50">
-                    <TableCell colSpan={6} className="text-right text-muted-foreground">
-                      Total P&L:
+                    <TableCell colSpan={4} className="text-right text-muted-foreground">
+                      Total:
+                    </TableCell>
+                    <TableCell className="text-right font-bold font-mono">
+                      {enhancedStats ? formatCurrency(enhancedStats.totalinvvalue) : '-'}
+                    </TableCell>
+                    <TableCell className="text-right font-bold font-mono">
+                      {enhancedStats ? formatCurrency(enhancedStats.totalholdingvalue) : '-'}
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -824,6 +884,20 @@ export default function Holdings() {
                       )}
                     >
                       {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '-'}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'text-right font-bold',
+                        enhancedStats && enhancedStats.totaldaypnlpercentage !== undefined
+                          ? isProfit(enhancedStats.totaldaypnlpercentage)
+                            ? 'text-green-600'
+                            : 'text-red-600'
+                          : 'text-muted-foreground'
+                      )}
+                    >
+                      {enhancedStats && enhancedStats.totaldaypnlpercentage !== undefined
+                        ? formatPercent(enhancedStats.totaldaypnlpercentage)
+                        : '-'}
                     </TableCell>
                     <TableCell className="text-right font-bold text-muted-foreground">
                       {rows.length > 0 ? '100.00%' : '-'}
