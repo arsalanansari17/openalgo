@@ -58,12 +58,32 @@ function totalQty(holding: Holding): number {
   return (holding.quantity || 0) + (holding.t1_quantity || 0) + (holding.pledged_quantity || 0)
 }
 
-/** Zerodha-style compact quantity: "0 T1:12 P:5" — omits T1/P entirely when zero. */
-function formatQuantity(holding: Holding): string {
-  const parts = [String(holding.quantity)]
-  if (holding.t1_quantity) parts.push(`T1:${holding.t1_quantity}`)
-  if (holding.pledged_quantity) parts.push(`P:${holding.pledged_quantity}`)
-  return parts.join(' ')
+/** Zerodha-style quantity cell: T1/Pledged badges before the free quantity, omitted when zero. */
+function QuantityCell({ holding }: { holding: Holding }) {
+  const hasT1 = (holding.t1_quantity || 0) > 0
+  const hasPledged = (holding.pledged_quantity || 0) > 0
+
+  if (!hasT1 && !hasPledged) {
+    return <>{holding.quantity}</>
+  }
+
+  const badgeClass = 'bg-pink-500/10 text-pink-600 border-pink-500/30 text-xs font-normal'
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {hasT1 && (
+        <Badge variant="secondary" className={badgeClass}>
+          T1: {holding.t1_quantity}
+        </Badge>
+      )}
+      {hasPledged && (
+        <Badge variant="secondary" className={badgeClass}>
+          P: {holding.pledged_quantity}
+        </Badge>
+      )}
+      <span>{holding.quantity}</span>
+    </span>
+  )
 }
 
 type SortColumn =
@@ -793,7 +813,7 @@ export default function Holdings() {
                     <TableRow key={`${holding.symbol}-${holding.exchange}-${index}`}>
                       <TableCell className="font-medium">{holding.symbol}</TableCell>
                       <TableCell className="text-right font-mono">
-                        {formatQuantity(holding)}
+                        <QuantityCell holding={holding} />
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {holding.average_price !== undefined
