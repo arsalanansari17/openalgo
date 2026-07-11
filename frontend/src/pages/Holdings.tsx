@@ -234,7 +234,7 @@ export default function Holdings() {
   // against the whole (not just what's currently shown).
   const filteredRows = useMemo(() => {
     let result = rows
-    if (hasActiveFilters) {
+    if (filters.hasT1 || filters.hasPledged) {
       result = result.filter((h) => {
         if (filters.hasT1 && (h.t1_quantity || 0) > 0) return true
         if (filters.hasPledged && (h.pledged_quantity || 0) > 0) return true
@@ -246,7 +246,7 @@ export default function Holdings() {
       result = result.filter((h) => h.symbol.toLowerCase().includes(query))
     }
     return result
-  }, [rows, filters, hasActiveFilters, searchQuery])
+  }, [rows, filters, searchQuery])
 
   const sortedRows = useMemo(() => {
     if (sortColumn === null) return filteredRows
