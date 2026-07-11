@@ -755,7 +755,12 @@ export default function Holdings() {
       {/* Holdings Table */}
       <Card>
         <CardContent className="py-0">
-          <div className="pt-3 pb-4 flex justify-end">
+          <div className="pt-3 pb-4 flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">
+              {hasActiveFilters
+                ? `${filteredRows.length} of ${rows.length} stock${rows.length === 1 ? '' : 's'}`
+                : `${rows.length} stock${rows.length === 1 ? '' : 's'}`}
+            </span>
             <div className="relative max-w-xs w-full">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
