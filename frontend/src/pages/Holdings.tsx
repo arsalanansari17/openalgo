@@ -745,7 +745,7 @@ export default function Holdings() {
       <Card>
         <CardContent className="py-0">
           <div className="pt-3 pb-4 flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">
+            <span className="text-sm font-medium text-foreground">
               {hasActiveFilters
                 ? `${filteredRows.length} of ${rows.length} stock${rows.length === 1 ? '' : 's'}`
                 : `${rows.length} stock${rows.length === 1 ? '' : 's'}`}
