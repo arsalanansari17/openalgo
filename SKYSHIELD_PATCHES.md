@@ -267,3 +267,82 @@ Two commits:
   153,899 records loaded, no change in downstream behavior.
 - Cherry-picked onto `skyshield-main` (`f4beb01a8`, `c0dd6a2c4`) with no
   conflicts.
+
+---
+
+## 2026-08-13 — Known issue (not patched): rare eventlet cross-thread race during heavy startup
+
+**Status:** observed once, not root-caused, not patched — logged here for
+future investigation rather than rushed under live-trading time pressure.
+
+### Symptom
+
+During the `main-sync-2026-08-13` deploy restart on acc2, ~43 seconds after
+gunicorn boot (overlapping with a 114k-row master-contract bulk insert),
+the dashboard became fully unresponsive (`HTTP 524` via Cloudflare, then
+`HTTP 000`/timeout on direct localhost checks) for about 4 minutes. Journal
+showed:
+
+```
+sqlite3.OperationalError: database is locked
+  ... database/apilog_db.py:99, async_log_order(), db_session.commit()
+...
+greenlet.error: Cannot switch to a different thread
+  eventlet/hubs/hub.py:471 fire_timers -> eventlet/semaphore.py:147 _do_acquire
+```
+
+A plain `sudo systemctl restart` cleared it immediately; it did not recur
+on acc2's or acc1's subsequent restart, and the order-update WebSocket
+stream (the path that matters for live fills) never dropped throughout.
+
+### Why this isn't the same bug as the 853d74328 eventlet/logging fix
+
+Traced the import order in `app.py` carefully: `websocket_proxy.app_integration`
+(which globally monkey-patches `logging.Handler.createLock` to a real OS
+`RLock`, plus sweeps and re-patches every already-instantiated handler) is
+imported at line 155, *after* `setup_logging()` has already created root's
+3 handlers (triggered on first `utils.logging` import, effectively line 2)
+but *before* any request is served or any `EventBus`-submitted callback
+runs. By the time anything can call `logger.xxx()` from a real OS thread,
+root's handlers already carry real OS `RLock`s — confirmed live on the
+acc2 VM (fresh interpreter check showed `_thread.RLock`, not an eventlet
+Semaphore). So this is very unlikely to be the same `Handler.lock` class
+of bug the earlier fix targeted.
+
+### Suspected root cause (unconfirmed)
+
+`database/apilog_db.py`'s module-level `engine`/`scoped_session` is created
+once at import time on the main gunicorn worker's OS thread. Order-log
+writes are dispatched via `utils/event_bus.py`'s `EventBus`, which runs
+callbacks on its own `concurrent.futures.ThreadPoolExecutor` — genuine OS
+threads, not eventlet green threads. `scoped_session`'s registry (and/or
+some internal SQLAlchemy/DBAPI lock touched during connection setup) likely
+relies on `threading.local()`, which eventlet monkey-patches to be
+greenlet-local rather than OS-thread-local — a real OS thread from the
+executor touching state bound to the main thread's hub is a plausible
+mechanism for the same class of "Cannot switch to a different thread"
+error, just via a different lock than the logging one. Not confirmed by
+live debugging or a controlled reproduction — a guess, not a diagnosis.
+
+### Why not patched now
+
+Applying an unverified threading/locking change to `apilog_db.py` on a
+live-trading account under time pressure risks introducing a worse bug
+than this rare, restart-clearing race. Needs either a controlled local
+reproduction (stress-test the master-contract download racing concurrent
+`EventBus` order-log writes) or live debugging before attempting a fix.
+
+### Next steps
+
+- Reproduce locally: trigger a large master-contract bulk insert
+  concurrently with several `EventBus`-dispatched `async_log_order` calls,
+  under `gunicorn --worker-class eventlet` (not the dev server, which uses
+  plain threading and won't reproduce this).
+- If reproduced, identify the exact lock object via `py-spy dump` or a
+  targeted `sys.settrace`, then apply the narrowest fix (likely: give
+  `apilog_db.py`'s executor-submitted path its own real-OS-thread-safe
+  session/engine, or route the DB write through `eventlet.tpool.execute()`
+  instead of `concurrent.futures.ThreadPoolExecutor`).
+- Consider filing upstream once root-caused, same as the other patches
+  in this file — this is not SkyShieldEdge-specific, `apilog_db.py` and
+  `event_bus.py` are unmodified upstream code.
