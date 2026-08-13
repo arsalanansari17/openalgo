@@ -218,3 +218,52 @@ in `iron_condor.py` and `intraday_ironfly.py` switched from
   and IntradayIronFly, NIFTY and SENSEX) computed lower, more conservative
   lot counts using `initial_total_margin` on both accounts, matching
   expected values.
+
+---
+
+## 2026-08-02/03 — Kotak scripmaster download fails with "Scripmaster API failed"
+
+**Branch:** `acc3-vm-deploy-2026-08-02` (cherry-picked onto `skyshield-main`)
+**Upstream issue:** [marketcalls/openalgo#1729](https://github.com/marketcalls/openalgo/issues/1729)
+**Upstream PR:** [marketcalls/openalgo#1730](https://github.com/marketcalls/openalgo/pull/1730)
+**Verified in production:** yes — full master contract download succeeds
+on acc3 (Iqbal/Kotak), 153,899 records loaded across NSE Cash/F&O, BSE
+Cash/F&O, CDS, and MCX.
+
+### Problem
+
+`download_csv_kotak_data()` used a `HEAD` request against Kotak's CDN
+(`lapi.kotaksecurities.com`) to check each fallback URL's accessibility
+before downloading. That `HEAD` reliably hit an infinite redirect loop
+("Exceeded maximum allowed redirects"), even though the identical URL
+returns 200 immediately via `GET`. Every fallback URL failed its
+accessibility check, `accessible_urls` stayed empty, and the function
+raised "Scripmaster API failed" unconditionally — even though the CSV
+data was fully downloadable the whole time. Reproduced identically from
+two unrelated networks/IPs with a valid, active Kotak session on both, so
+not account- or network-specific.
+
+### Fix
+
+Two commits:
+
+1. Swap the accessibility check from `HEAD` to a ranged `GET`
+   (`bytes=0-0`) — avoids the redirect loop. Intended to also avoid a full
+   duplicate download of each multi-MB file (once for the check, once for
+   the real download), though Kotak's CDN currently ignores the `Range`
+   header and returns the full body anyway — today this is a correctness
+   fix only, not a bandwidth win. Accepts both `200` and `206`.
+2. Follow-up from upstream PR review (#1730): the ranged `GET` still
+   buffered the entire response body in memory once Kotak's CDN ignores
+   `Range` and returns the full multi-MB CSV — doubling peak memory use
+   for no reason, since the real download re-fetches the same file right
+   after. Switched to `client.stream()`, reading only the status code and
+   closing the connection without consuming the body.
+
+### Verification
+
+- `uv run ruff check broker/kotak/database/master_contract_db.py` — clean.
+- Full `master_contract_download()` verified end-to-end after each commit:
+  153,899 records loaded, no change in downstream behavior.
+- Cherry-picked onto `skyshield-main` (`f4beb01a8`, `c0dd6a2c4`) with no
+  conflicts.
