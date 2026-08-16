@@ -84,7 +84,13 @@ def parse_margin_response(response_data):
 
         # Extract margin data
         # Kotak returns: avlMrgn, reqdMrgn, ordMrgn, mrgnUsd, rmsVldtd, etc.
-        total_margin_required = float(response_data.get("reqdMrgn", 0))
+        # reqdMrgn is the shortfall beyond currently available margin (0 when
+        # the account already has enough headroom), not the order's actual
+        # cost -- ordMrgn is the real per-order margin figure callers need
+        # for lot sizing. Fall back to reqdMrgn if ordMrgn is absent.
+        total_margin_required = float(
+            response_data.get("ordMrgn") or response_data.get("reqdMrgn") or 0
+        )
 
         # Return standardized format matching OpenAlgo API specification
         return {
