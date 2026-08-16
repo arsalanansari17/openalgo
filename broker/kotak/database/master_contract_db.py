@@ -610,6 +610,10 @@ def master_contract_download():
         # Clean up temporary files
         delete_kotak_temp_data(output_path)
 
+        # Add indices Kotak's own instrument master omits but its quotes API
+        # can still serve by name (currently: India VIX).
+        _ensure_synthetic_index_rows()
+
         logger.info(f"Master contract download completed. Total records: {total_records}")
 
         if total_records > 0:
@@ -626,6 +630,38 @@ def master_contract_download():
     except Exception as e:
         logger.error(f"Master contract download failed: {str(e)}")
         return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+
+
+def _ensure_synthetic_index_rows():
+    """Insert SymToken rows for indices Kotak's own instrument master omits
+    but whose live quotes Kotak's API can still serve by name.
+
+    Confirmed by direct inspection: Kotak's NSE_CM.csv yields exactly 4
+    NSE_INDEX rows (BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTY) -- no India VIX
+    entry, under any name. Yet BrokerData._get_index_symbol_candidates()
+    already maps INDIAVIX -> "India VIX" and successfully resolves it through
+    Kotak's /quotes/neosymbol endpoint, which looks up by name, not by this
+    token. The blocker is entirely upstream: services/quotes_service.py's
+    validate_symbol_exchange() requires a SymToken row to exist before any
+    broker code runs at all. Without this row, Kotak's working VIX lookup is
+    unreachable. The token value is never used for index quotes lookups, but
+    must be non-numeric so it can never collide with a real Kotak pSymbol.
+    """
+    if SymToken.query.filter_by(symbol="INDIAVIX", exchange="NSE_INDEX").first():
+        return
+    db_session.add(
+        SymToken(
+            symbol="INDIAVIX",
+            brsymbol="INDIAVIX",
+            name="India VIX",
+            exchange="NSE_INDEX",
+            brexchange="NSE",
+            token="SYNTHETIC_INDIAVIX",
+            instrumenttype="INDEX",
+        )
+    )
+    db_session.commit()
+    logger.info("Inserted synthetic INDIAVIX SymToken row (absent from Kotak's own instrument master)")
 
 
 def search_symbols(symbol, exchange):
