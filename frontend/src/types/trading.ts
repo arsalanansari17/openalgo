@@ -41,11 +41,16 @@ export interface Holding {
   symbol: string
   exchange: string
   quantity: number
+  t1_quantity?: number
+  pledged_quantity?: number
   product: string
   pnl: number
   pnlpercent: number
   ltp?: number
   average_price?: number
+  /** Today's price change vs previous close, computed client-side from live LTP. */
+  day_change?: number
+  day_change_percent?: number
 }
 
 export interface PortfolioStats {
@@ -53,6 +58,9 @@ export interface PortfolioStats {
   totalinvvalue: number
   totalprofitandloss: number
   totalpnlpercentage: number
+  /** Aggregate day's P&L across all holdings, computed client-side once live quotes load. */
+  totaldaypnl?: number
+  totaldaypnlpercentage?: number
 }
 
 // Alias for consistency

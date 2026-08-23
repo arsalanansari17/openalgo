@@ -15,9 +15,18 @@ export interface PriceableItem {
   pnl?: number
   pnlpercent?: number
   quantity?: number
+  t1_quantity?: number
+  pledged_quantity?: number
   average_price?: number
   today_realized_pnl?: number // Sandbox: today's realized P&L from closed partial trades
   lot_size?: number // Contract multiplier (e.g. 0.01 for Delta Exchange ETHUSD.P)
+  day_change?: number // Today's price change vs previous close (ltp - prev_close)
+  day_change_percent?: number
+}
+
+/** Free + T1 + pledged — the total held quantity, not just the freely-sellable portion. */
+function totalQuantity(item: PriceableItem): number {
+  return (item.quantity || 0) + (item.t1_quantity || 0) + (item.pledged_quantity || 0)
 }
 
 /**
@@ -214,7 +223,9 @@ export function useLivePrice<T extends PriceableItem>(
       const wsData = marketData.get(key)
       const mqData = multiQuotes.get(key)
 
-      const qty = item.quantity || 0
+      // Total held (free + T1 + pledged) — a fully-pledged/T1 holding still
+      // needs live pricing even though its free `quantity` is 0.
+      const qty = totalQuantity(item)
       const avgPrice = item.average_price || 0
 
       // Check if market is open for this exchange
@@ -245,6 +256,19 @@ export function useLivePrice<T extends PriceableItem>(
         dataSource = 'rest'
       }
 
+      // Day change vs previous close. prev_close comes from MultiQuotes, which is
+      // fetched unconditionally for every symbol (not just as a WS fallback) — so
+      // it's available broker-agnostically regardless of which source currentLtp
+      // came from. This is what makes day-change work identically across every
+      // broker, including ones whose native holdings response has no such field.
+      const prevClose = mqData?.prev_close
+      let dayChange: number | undefined
+      let dayChangePercent: number | undefined
+      if (currentLtp !== undefined && prevClose && prevClose > 0) {
+        dayChange = currentLtp - prevClose
+        dayChangePercent = (dayChange / prevClose) * 100
+      }
+
       // For closed positions (qty=0), preserve ALL REST API values including LTP
       // This ensures P&L% calculation remains stable (realized values don't change)
       if (qty === 0) {
@@ -252,6 +276,8 @@ export function useLivePrice<T extends PriceableItem>(
           ...item,
           // Keep item.ltp from REST API - don't update with live data
           // This prevents P&L% from recalculating with changing LTP
+          day_change: dayChange,
+          day_change_percent: dayChangePercent,
           _dataSource: 'rest',
         } as T & { _dataSource: string }
       }
@@ -293,6 +319,8 @@ export function useLivePrice<T extends PriceableItem>(
         ltp: currentLtp,
         pnl: calculatedPnl,
         pnlpercent: calculatedPnlPercent,
+        day_change: dayChange,
+        day_change_percent: dayChangePercent,
         _dataSource: dataSource,
       } as T & { _dataSource: string }
     })
@@ -320,6 +348,8 @@ export function calculateLiveStats<T extends PriceableItem>(
     totalinvvalue?: number
     totalprofitandloss?: number
     totalpnlpercentage?: number
+    totaldaypnl?: number
+    totaldaypnlpercentage?: number
   }
 ) {
   if (!originalStats) return null
@@ -327,17 +357,27 @@ export function calculateLiveStats<T extends PriceableItem>(
   let totalPnl = 0
   let totalInvestment = 0
   let totalHoldingValue = 0
+  let totalDayPnl = 0
+  let totalPrevCloseValue = 0
 
   items.forEach((item) => {
     totalPnl += item.pnl || 0
     const avgPrice = item.average_price || 0
-    const qty = item.quantity || 0
+    const qty = totalQuantity(item)
     const ltp = item.ltp || avgPrice
     totalInvestment += avgPrice * qty
     totalHoldingValue += ltp * qty
+
+    // day_change is per-share; weight by qty the same way P&L is, and derive
+    // prevClose back out (ltp - day_change) rather than storing it separately.
+    if (item.day_change !== undefined) {
+      totalDayPnl += item.day_change * qty
+      totalPrevCloseValue += (ltp - item.day_change) * qty
+    }
   })
 
   const totalPnlPercent = totalInvestment > 0 ? (totalPnl / totalInvestment) * 100 : 0
+  const totalDayPnlPercent = totalPrevCloseValue > 0 ? (totalDayPnl / totalPrevCloseValue) * 100 : 0
 
   return {
     ...originalStats,
@@ -345,5 +385,7 @@ export function calculateLiveStats<T extends PriceableItem>(
     totalinvvalue: totalInvestment,
     totalprofitandloss: totalPnl,
     totalpnlpercentage: totalPnlPercent,
+    totaldaypnl: totalDayPnl,
+    totaldaypnlpercentage: totalDayPnlPercent,
   }
 }

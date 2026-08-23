@@ -1,13 +1,17 @@
 import {
   AlertTriangle,
+  ArrowUpDown,
   Download,
   Loader2,
   Pause,
   Radio,
   RefreshCw,
+  Search,
+  Settings2,
   TrendingDown,
   TrendingUp,
   Wallet,
+  X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
@@ -15,6 +19,17 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Table,
   TableBody,
@@ -48,6 +63,61 @@ interface HoldingOrderIntent {
   quantity: number
 }
 
+/** Free + T1 + pledged — the total held quantity, not just the freely-sellable portion. */
+function totalQty(holding: Holding): number {
+  return (holding.quantity || 0) + (holding.t1_quantity || 0) + (holding.pledged_quantity || 0)
+}
+
+/** Zerodha-style quantity cell: T1/Pledged badges before the free quantity, omitted when zero. */
+function QuantityCell({ holding }: { holding: Holding }) {
+  const hasT1 = (holding.t1_quantity || 0) > 0
+  const hasPledged = (holding.pledged_quantity || 0) > 0
+
+  if (!hasT1 && !hasPledged) {
+    return <>{holding.quantity}</>
+  }
+
+  const badgeClass = 'bg-pink-500/10 text-pink-600 border-pink-500/30 text-xs font-normal'
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {hasT1 && (
+        <Badge variant="secondary" className={badgeClass}>
+          T1: {holding.t1_quantity}
+        </Badge>
+      )}
+      {hasPledged && (
+        <Badge variant="secondary" className={badgeClass}>
+          P: {holding.pledged_quantity}
+        </Badge>
+      )}
+      <span>{holding.quantity}</span>
+    </span>
+  )
+}
+
+type SortColumn =
+  | 'symbol'
+  | 'quantity'
+  | 'average_price'
+  | 'ltp'
+  | 'invested'
+  | 'current'
+  | 'pnl'
+  | 'pnlpercent'
+  | 'day_change_percent'
+  | 'allocation'
+  | null
+type SortDirection = 'asc' | 'desc'
+type AllocationBasis = 'current' | 'invested'
+
+interface FilterState {
+  hasT1: boolean
+  hasPledged: boolean
+}
+
+const STORAGE_KEY = 'openalgo_holdings_prefs'
+
 export default function Holdings() {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
@@ -58,6 +128,46 @@ export default function Holdings() {
   const [error, setError] = useState<string | null>(null)
   const [showStaleWarning, setShowStaleWarning] = useState(false)
   const [orderIntent, setOrderIntent] = useState<HoldingOrderIntent | null>(null)
+  const [sortColumn, setSortColumn] = useState<SortColumn>(null)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [allocationBasis, setAllocationBasis] = useState<AllocationBasis>('current')
+  const [filters, setFilters] = useState<FilterState>({ hasT1: false, hasPledged: false })
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // Load/save preferences from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.allocationBasis === 'current' || parsed.allocationBasis === 'invested') {
+          setAllocationBasis(parsed.allocationBasis)
+        }
+        if (parsed.filters) {
+          setFilters({
+            hasT1: Boolean(parsed.filters.hasT1),
+            hasPledged: Boolean(parsed.filters.hasPledged),
+          })
+        }
+      }
+    } catch {
+      // Ignore malformed saved prefs
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ allocationBasis, filters }))
+  }, [allocationBasis, filters])
+
+  const hasActiveFilters = filters.hasT1 || filters.hasPledged || searchQuery.trim() !== ''
+  const toggleFilter = (key: keyof FilterState) => {
+    setFilters((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+  const clearFilters = () => {
+    setFilters({ hasT1: false, hasPledged: false })
+    setSearchQuery('')
+  }
 
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
@@ -92,6 +202,123 @@ export default function Holdings() {
     // Recalculate stats with real-time data
     return calculateLiveStats(enhancedHoldings, stats)
   }, [stats, enhancedHoldings])
+
+  // Derive per-row Invested/Current/Allocation from the live-priced holdings.
+  // Invested and Current both use total quantity (free + T1 + pledged) since
+  // pledged/T1 shares are still part of what you own and what you paid for them.
+  const rows = useMemo(() => {
+    const withValues = enhancedHoldings.map((holding) => {
+      const qty = totalQty(holding)
+      const ltp = holding.ltp ?? holding.average_price ?? 0
+      return {
+        ...holding,
+        invested: qty * (holding.average_price || 0),
+        current: qty * ltp,
+      }
+    })
+    const totalBasis = withValues.reduce(
+      (sum, h) => sum + (allocationBasis === 'invested' ? h.invested : h.current),
+      0
+    )
+    return withValues.map((holding) => {
+      const basisValue = allocationBasis === 'invested' ? holding.invested : holding.current
+      return {
+        ...holding,
+        allocation: totalBasis > 0 ? (basisValue / totalBasis) * 100 : 0,
+      }
+    })
+  }, [enhancedHoldings, allocationBasis])
+
+  // Filtering happens after allocation is computed against the full
+  // portfolio, so a filtered view's percentages still add up meaningfully
+  // against the whole (not just what's currently shown).
+  const filteredRows = useMemo(() => {
+    let result = rows
+    if (filters.hasT1 || filters.hasPledged) {
+      result = result.filter((h) => {
+        if (filters.hasT1 && (h.t1_quantity || 0) > 0) return true
+        if (filters.hasPledged && (h.pledged_quantity || 0) > 0) return true
+        return false
+      })
+    }
+    const query = searchQuery.trim().toLowerCase()
+    if (query) {
+      result = result.filter((h) => h.symbol.toLowerCase().includes(query))
+    }
+    return result
+  }, [rows, filters, searchQuery])
+
+  const sortedRows = useMemo(() => {
+    if (sortColumn === null) return filteredRows
+
+    return [...filteredRows].sort((a, b) => {
+      let aVal: string | number
+      let bVal: string | number
+
+      switch (sortColumn) {
+        case 'symbol':
+          aVal = a.symbol
+          bVal = b.symbol
+          break
+        case 'quantity':
+          aVal = totalQty(a)
+          bVal = totalQty(b)
+          break
+        case 'average_price':
+          aVal = a.average_price || 0
+          bVal = b.average_price || 0
+          break
+        case 'ltp':
+          aVal = a.ltp || 0
+          bVal = b.ltp || 0
+          break
+        case 'invested':
+          aVal = a.invested
+          bVal = b.invested
+          break
+        case 'current':
+          aVal = a.current
+          bVal = b.current
+          break
+        case 'pnl':
+          aVal = a.pnl || 0
+          bVal = b.pnl || 0
+          break
+        case 'pnlpercent':
+          aVal = a.pnlpercent || 0
+          bVal = b.pnlpercent || 0
+          break
+        case 'day_change_percent':
+          aVal = a.day_change_percent ?? 0
+          bVal = b.day_change_percent ?? 0
+          break
+        case 'allocation':
+          aVal = a.allocation
+          bVal = b.allocation
+          break
+        default:
+          return 0
+      }
+
+      if (typeof aVal === 'string') {
+        return sortDirection === 'asc'
+          ? aVal.localeCompare(bVal as string)
+          : (bVal as string).localeCompare(aVal)
+      }
+      return sortDirection === 'asc'
+        ? (aVal as number) - (bVal as number)
+        : (bVal as number) - (aVal as number)
+    })
+  }, [filteredRows, sortColumn, sortDirection])
+
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortColumn(column)
+      setSortDirection('asc')
+    }
+  }
 
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
@@ -166,7 +393,7 @@ export default function Holdings() {
   }, [fetchHoldings])
 
   const exportToCSV = () => {
-    if (enhancedHoldings.length === 0) {
+    if (sortedRows.length === 0) {
       showToast.error('No data to export', 'system')
       return
     }
@@ -174,26 +401,37 @@ export default function Holdings() {
     try {
       const headers = [
         'Symbol',
-        'Exchange',
         'Quantity',
-        'Avg Price',
+        'T1 Qty',
+        'Pledged Qty',
+        'Avg. Price',
         'LTP',
-        'Product',
+        'Invested',
+        'Current',
         'P&L',
         'P&L %',
+        'Allocation %',
       ]
-      const rows = enhancedHoldings.map((h) => [
+      // sanitizeCSV's formula-injection prefix ('-123 -> '-123) is only needed
+      // for free-text fields; these are all genuine numbers from the broker
+      // API, so a plain string conversion avoids a spurious leading "'" on
+      // every negative value while staying just as safe (a JS number can
+      // never contain a formula payload).
+      const csvRows = sortedRows.map((h) => [
         sanitizeCSV(h.symbol),
-        sanitizeCSV(h.exchange),
-        sanitizeCSV(h.quantity),
-        sanitizeCSV(h.average_price),
-        sanitizeCSV(h.ltp),
-        sanitizeCSV(h.product),
-        sanitizeCSV(h.pnl),
-        sanitizeCSV(h.pnlpercent),
+        String(h.quantity ?? ''),
+        String(h.t1_quantity || 0),
+        String(h.pledged_quantity || 0),
+        String(h.average_price ?? ''),
+        String(h.ltp ?? ''),
+        String(h.invested ?? ''),
+        String(h.current ?? ''),
+        String(h.pnl ?? ''),
+        (h.pnlpercent ?? 0).toFixed(2),
+        String(h.allocation ?? ''),
       ])
 
-      const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+      const csv = [headers, ...csvRows].map((row) => row.join(',')).join('\n')
       const blob = new Blob([csv], { type: 'text/csv' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -210,6 +448,31 @@ export default function Holdings() {
   }
 
   const isProfit = (value: number) => value >= 0
+
+  const SortableHeader = ({
+    column,
+    label,
+    className,
+  }: {
+    column: SortColumn
+    label: string
+    className?: string
+  }) => (
+    <TableHead
+      className={cn('cursor-pointer hover:bg-muted/50 select-none', className)}
+      onClick={() => handleSort(column)}
+    >
+      <div
+        className={cn(
+          'flex items-center gap-1 w-full',
+          className?.includes('text-right') && 'justify-end'
+        )}
+      >
+        {label}
+        <ArrowUpDown className="h-3 w-3 opacity-50" />
+      </div>
+    </TableHead>
+  )
 
   return (
     <div className="space-y-6">
@@ -249,6 +512,98 @@ export default function Holdings() {
           <p className="text-muted-foreground">View your holdings portfolio</p>
         </div>
         <div className="flex items-center gap-2">
+          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant={hasActiveFilters ? 'default' : 'outline'}
+                size="sm"
+                className="relative"
+              >
+                <Settings2 className="h-4 w-4 mr-2" />
+                Filters
+                {hasActiveFilters && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                )}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Holdings Filters</DialogTitle>
+                <DialogDescription>Configure filters and how portfolio metrics are calculated</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-6 py-4">
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Filters
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant={filters.hasT1 ? 'default' : 'outline'}
+                      size="sm"
+                      className={cn('rounded-full', filters.hasT1 && 'bg-pink-500 hover:bg-pink-600')}
+                      onClick={() => toggleFilter('hasT1')}
+                    >
+                      Has T1 Quantity
+                    </Button>
+                    <Button
+                      variant={filters.hasPledged ? 'default' : 'outline'}
+                      size="sm"
+                      className={cn(
+                        'rounded-full',
+                        filters.hasPledged && 'bg-pink-500 hover:bg-pink-600'
+                      )}
+                      onClick={() => toggleFilter('hasPledged')}
+                    >
+                      Has Pledged Quantity
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Selecting both shows holdings matching either.
+                  </p>
+                </div>
+
+                <div className="border-t" />
+
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Allocation Basis
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { value: 'current', label: 'Current Value' },
+                      { value: 'invested', label: 'Invested Value' },
+                    ].map((opt) => (
+                      <Button
+                        key={opt.value}
+                        variant={allocationBasis === opt.value ? 'default' : 'outline'}
+                        size="sm"
+                        className={cn(
+                          'rounded-full',
+                          allocationBasis === opt.value && 'bg-pink-500 hover:bg-pink-600'
+                        )}
+                        onClick={() => setAllocationBasis(opt.value as AllocationBasis)}
+                      >
+                        {opt.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {allocationBasis === 'current'
+                      ? 'Weight by market value today (qty × LTP).'
+                      : 'Weight by cost basis (qty × avg. price).'}
+                  </p>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="ghost" onClick={clearFilters}>
+                  Clear All
+                </Button>
+                <Button onClick={() => setSettingsOpen(false)}>Done</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <Button
             variant="outline"
             size="sm"
@@ -265,19 +620,41 @@ export default function Holdings() {
         </div>
       </div>
 
+      {/* Active Filters Bar */}
+      {hasActiveFilters && (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm text-muted-foreground">Active Filters:</span>
+          {filters.hasT1 && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              Has T1 Quantity
+            </Badge>
+          )}
+          {filters.hasPledged && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              Has Pledged Quantity
+            </Badge>
+          )}
+          {searchQuery.trim() !== '' && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              Search: {searchQuery}
+            </Badge>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-red-500 border-red-500/50 hover:bg-red-500/10"
+            onClick={clearFilters}
+          >
+            Clear All
+          </Button>
+        </div>
+      )}
+
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total Holding Value</CardDescription>
-            <CardTitle className="text-2xl text-primary">
-              {enhancedStats ? formatCurrency(enhancedStats.totalholdingvalue) : '---'}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Total Investment Value</CardDescription>
+            <CardDescription>Invested</CardDescription>
             <CardTitle className="text-2xl">
               {enhancedStats ? formatCurrency(enhancedStats.totalinvvalue) : '---'}
             </CardTitle>
@@ -285,23 +662,48 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total Profit and Loss</CardDescription>
+            <CardDescription>Current</CardDescription>
+            <CardTitle className="text-2xl text-primary">
+              {enhancedStats ? formatCurrency(enhancedStats.totalholdingvalue) : '---'}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Day's P&L</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
-                enhancedStats && isProfit(enhancedStats.totalprofitandloss)
-                  ? 'text-green-600'
-                  : 'text-red-600'
+                enhancedStats && enhancedStats.totaldaypnl !== undefined
+                  ? isProfit(enhancedStats.totaldaypnl)
+                    ? 'text-green-600'
+                    : 'text-red-600'
+                  : ''
               )}
             >
-              {enhancedStats ? (
-                <div className="flex items-center gap-1">
-                  {isProfit(enhancedStats.totalprofitandloss) ? (
-                    <TrendingUp className="h-5 w-5" />
-                  ) : (
-                    <TrendingDown className="h-5 w-5" />
+              {enhancedStats && enhancedStats.totaldaypnl !== undefined ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    {isProfit(enhancedStats.totaldaypnl) ? (
+                      <TrendingUp className="h-5 w-5" />
+                    ) : (
+                      <TrendingDown className="h-5 w-5" />
+                    )}
+                    {formatCurrency(enhancedStats.totaldaypnl)}
+                  </div>
+                  {enhancedStats.totaldaypnlpercentage !== undefined && (
+                    <Badge
+                      variant="secondary"
+                      className={cn(
+                        'text-xs',
+                        isProfit(enhancedStats.totaldaypnlpercentage)
+                          ? 'bg-green-500/10 text-green-600'
+                          : 'bg-red-500/10 text-red-600'
+                      )}
+                    >
+                      {formatPercent(enhancedStats.totaldaypnlpercentage)}
+                    </Badge>
                   )}
-                  {formatCurrency(enhancedStats.totalprofitandloss)}
                 </div>
               ) : (
                 '---'
@@ -311,16 +713,40 @@ export default function Holdings() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total PnL Percentage</CardDescription>
+            <CardDescription>Total P&L</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
-                enhancedStats && isProfit(enhancedStats.totalpnlpercentage)
+                enhancedStats && isProfit(enhancedStats.totalprofitandloss)
                   ? 'text-green-600'
                   : 'text-red-600'
               )}
             >
-              {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '---'}
+              {enhancedStats ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    {isProfit(enhancedStats.totalprofitandloss) ? (
+                      <TrendingUp className="h-5 w-5" />
+                    ) : (
+                      <TrendingDown className="h-5 w-5" />
+                    )}
+                    {formatCurrency(enhancedStats.totalprofitandloss)}
+                  </div>
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      'text-xs',
+                      isProfit(enhancedStats.totalpnlpercentage)
+                        ? 'bg-green-500/10 text-green-600'
+                        : 'bg-red-500/10 text-red-600'
+                    )}
+                  >
+                    {formatPercent(enhancedStats.totalpnlpercentage)}
+                  </Badge>
+                </div>
+              ) : (
+                '---'
+              )}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -329,6 +755,32 @@ export default function Holdings() {
       {/* Holdings Table */}
       <Card>
         <CardContent className="py-0">
+          <div className="pt-3 pb-4 flex items-center justify-between">
+            <span className="ml-2 text-base font-semibold text-foreground">
+              {hasActiveFilters
+                ? `${filteredRows.length} of ${rows.length} stock${rows.length === 1 ? '' : 's'}`
+                : `${rows.length} stock${rows.length === 1 ? '' : 's'}`}
+            </span>
+            <div className="relative max-w-xs w-full">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search symbol..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 pr-8"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin" />
@@ -341,30 +793,52 @@ export default function Holdings() {
               title="No holdings found"
               description="Connect a broker to start tracking your portfolio."
             />
+          ) : filteredRows.length === 0 ? (
+            <EmptyState
+              icon={Wallet}
+              title="No holdings match"
+              description={
+                searchQuery
+                  ? `No symbol matches "${searchQuery}". Try a different search or clear the filters in Settings.`
+                  : 'Adjust or clear the filters in Settings to see your holdings.'
+              }
+            />
           ) : (
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Trading Symbol</TableHead>
+                    <SortableHeader column="symbol" label="Trading Symbol" />
                     <TableHead>Exchange</TableHead>
-                    <TableHead className="text-right">Quantity</TableHead>
-                    <TableHead className="text-right">Avg Price</TableHead>
-                    <TableHead className="text-right">LTP</TableHead>
+                    {/* T1/Pledged no longer get their own columns - folded into the
+                        Quantity cell via formatQuantity()'s "0 T1:12 P:5" display. */}
+                    <SortableHeader column="quantity" label="Quantity" className="text-right" />
+                    <SortableHeader column="average_price" label="Avg. Price" className="text-right" />
+                    <SortableHeader column="ltp" label="LTP" className="text-right" />
                     <TableHead>Product</TableHead>
-                    <TableHead className="text-right">Profit and Loss</TableHead>
-                    <TableHead className="text-right">PnL %</TableHead>
+                    <SortableHeader column="invested" label="Invested" className="text-right" />
+                    <SortableHeader column="current" label="Current" className="text-right" />
+                    <SortableHeader column="pnl" label="P&L" className="text-right" />
+                    <SortableHeader column="pnlpercent" label="P&L %" className="text-right" />
+                    <SortableHeader
+                      column="day_change_percent"
+                      label="Day Chg %"
+                      className="text-right"
+                    />
+                    <SortableHeader column="allocation" label="Allocation" className="text-right" />
                     <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {enhancedHoldings.map((holding, index) => (
+                  {sortedRows.map((holding, index) => (
                     <TableRow key={`${holding.symbol}-${holding.exchange}-${index}`}>
                       <TableCell className="font-medium">{holding.symbol}</TableCell>
                       <TableCell>
                         <Badge variant="outline">{holding.exchange}</Badge>
                       </TableCell>
-                      <TableCell className="text-right font-mono">{holding.quantity}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        <QuantityCell holding={holding} />
+                      </TableCell>
                       <TableCell className="text-right font-mono">
                         {holding.average_price !== undefined
                           ? formatCurrency(holding.average_price)
@@ -375,6 +849,12 @@ export default function Holdings() {
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">{holding.product}</Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {formatCurrency(holding.invested)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {formatCurrency(holding.current)}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -398,6 +878,23 @@ export default function Holdings() {
                         )}
                       >
                         {formatPercent(holding.pnlpercent)}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          'text-right',
+                          holding.day_change_percent === undefined
+                            ? 'text-muted-foreground'
+                            : isProfit(holding.day_change_percent)
+                              ? 'text-green-600'
+                              : 'text-red-600'
+                        )}
+                      >
+                        {holding.day_change_percent !== undefined
+                          ? formatPercent(holding.day_change_percent)
+                          : '-'}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">
+                        {holding.allocation.toFixed(2)}%
                       </TableCell>
                       <TableCell className="text-center">
                         <div className="flex items-center justify-center gap-2">
@@ -439,7 +936,13 @@ export default function Holdings() {
                 <TableFooter>
                   <TableRow className="bg-muted/50">
                     <TableCell colSpan={6} className="text-right text-muted-foreground">
-                      Total P&L:
+                      Total:
+                    </TableCell>
+                    <TableCell className="text-right font-bold font-mono">
+                      {enhancedStats ? formatCurrency(enhancedStats.totalinvvalue) : '-'}
+                    </TableCell>
+                    <TableCell className="text-right font-bold font-mono">
+                      {enhancedStats ? formatCurrency(enhancedStats.totalholdingvalue) : '-'}
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -462,6 +965,23 @@ export default function Holdings() {
                       )}
                     >
                       {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '-'}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'text-right font-bold',
+                        enhancedStats && enhancedStats.totaldaypnlpercentage !== undefined
+                          ? isProfit(enhancedStats.totaldaypnlpercentage)
+                            ? 'text-green-600'
+                            : 'text-red-600'
+                          : 'text-muted-foreground'
+                      )}
+                    >
+                      {enhancedStats && enhancedStats.totaldaypnlpercentage !== undefined
+                        ? formatPercent(enhancedStats.totaldaypnlpercentage)
+                        : '-'}
+                    </TableCell>
+                    <TableCell className="text-right font-bold text-muted-foreground">
+                      {rows.length > 0 ? '100.00%' : '-'}
                     </TableCell>
                     {/* Keeps the footer aligned with the Actions column */}
                     <TableCell />
