@@ -59,16 +59,25 @@ def get_margin_data(auth_token):
 
         # "availablecash" must be the actual free cash balance, not total
         # margin. Kite's own available.cash field has been observed to
-        # intermittently report 0 for a funded account even though the
-        # top-level "net" stays correct (see GitHub issue #1582 discussion).
-        # Kite defines net = cash + collateral - debits, so derive cash from
-        # the always-reliable net/debits/collateral instead of trusting
-        # available.cash directly -- mathematically identical when cash is
-        # healthy, and self-heals when it isn't.
-        total_net_margin = sum(
-            [margin_data["data"]["commodity"]["net"], margin_data["data"]["equity"]["net"]]
+        # intermittently report 0 for a funded account (see GitHub issue
+        # #1582 discussion) -- but deriving it as net + debits - collateral
+        # doesn't work either: net = opening_balance - debits + collateral
+        # (Kite's own identity), so substituting cancels debits and
+        # collateral out exactly, leaving net + debits - collateral =
+        # opening_balance every time. That's the account's static
+        # start-of-day balance, not live cash -- verified against two raw
+        # margins snapshots from the same account on the same day, six
+        # hours apart: opening_balance stayed frozen at 408,451.40 in both,
+        # while real cash moved from 21,984.56 to 411,415.40.
+        # available.live_balance is the field that's actually correct in
+        # both snapshots and tracks real intraday usage -- use that
+        # directly instead of reconstructing from net/debits/collateral.
+        total_available_margin = sum(
+            [
+                margin_data["data"]["commodity"]["available"]["live_balance"],
+                margin_data["data"]["equity"]["available"]["live_balance"],
+            ]
         )
-        total_available_margin = total_net_margin + total_used_margin - total_collateral
 
         # Fetch PnL from position book
         total_realised = 0

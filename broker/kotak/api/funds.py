@@ -71,14 +71,19 @@ def get_margin_data(auth_token):
 
         # Process and return the margin data
         # Note: Based on the API docs, the response fields are at root level
-        # Available Balance = CollateralValue + RmsPayInAmt - RmsPayOutAmt + Collateral
-        collateral_value = float(margin_data.get("CollateralValue", 0))
+        # "availablecash" must be cash only, not cash+collateral -- Collateral
+        # is already reported as its own field below, so folding it into
+        # availablecash too double-counts it (see GitHub issue #1582, where
+        # the same bug was fixed for Zerodha's Available Balance figure but
+        # never touched here). CollateralValue is a separate, larger field
+        # than Collateral (haircut-adjusted collateral actually usable as
+        # margin) and isn't part of cash either.
         pay_in = float(margin_data.get("RmsPayInAmt", 0))
         pay_out = float(margin_data.get("RmsPayOutAmt", 0))
         collateral = float(margin_data.get("Collateral", 0))
 
         processed_margin_data = {
-            "availablecash": f"{collateral_value + pay_in - pay_out + collateral:.2f}",
+            "availablecash": f"{pay_in - pay_out:.2f}",
             "collateral": f"{collateral:.2f}",
             "m2munrealized": f"{float(margin_data.get('UnrealizedMtomPrsnt', 0)):.2f}",
             "m2mrealized": f"{float(margin_data.get('RealizedMtomPrsnt', 0)):.2f}",
