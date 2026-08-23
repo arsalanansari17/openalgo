@@ -426,3 +426,86 @@ it's the pre-fork original.
   `/api/v1/expiry` respond normally (not just `/api/v1/ping`), and
   `journalctl` shows no `greenlet.error` / `Cannot switch to a different
   thread` / deadlock in the minutes after a restart.
+
+---
+
+## 2026-08-23 — Zerodha/Kotak `availablecash` real fix (recovered from uncommitted VM state)
+
+**Branch:** committed directly onto `main-sync-2026-08-23`
+**Upstream issue:** #1582 (already "fixed" upstream via `8a5e8700`/
+`7f9790ab`, both merged into `origin/main` — that fix is the same broken
+formula this patch replaces)
+**Upstream PR:** none opened yet
+**Verified in production:** yes — this exact content had been live on
+acc1/acc2 (`broker/zerodha/api/funds.py`) and acc3
+(`broker/kotak/api/funds.py`) as **uncommitted** VM edits since earlier in
+this session, found and committed for the first time while preparing this
+sync (a plain `git checkout`/`pull` on any of the 3 VMs would otherwise
+have silently discarded it).
+
+### Problem
+
+Zerodha: `total_net_margin + total_used_margin - total_collateral`
+algebraically always equals `opening_balance` (Kite's own identity is
+`net = opening_balance - debits + collateral`, so substituting cancels
+debits/collateral out exactly) — never real intraday cash. Verified
+against two raw `/user/margins` pulls on the same account six hours apart:
+the formula stayed frozen at 408,451.40 in both while real cash moved
+21,984.56 -> 411,415.40.
+
+Kotak: `CollateralValue + RmsPayInAmt - RmsPayOutAmt + Collateral` double
+counts collateral — it's already reported as its own `collateral` field
+in the response.
+
+### Fix
+
+Zerodha: sum `available.live_balance` (commodity + equity) directly —
+correct in both verification snapshots, tracks real intraday usage.
+Kotak: `RmsPayInAmt - RmsPayOutAmt` only, dropping both collateral terms.
+
+### Verification
+
+- Full write-up and algebraic proof from earlier in this session (see
+  session history / the GitHub #1582 comment posted from this repo).
+- Live-verified on acc1/acc2/acc3 as uncommitted state before this commit
+  formalized it — this is not new/untested code, just newly tracked.
+
+---
+
+## 2026-08-23 — Kotak: ordMrgn margin field + synthetic INDIAVIX SymToken (folded in from acc3)
+
+**Branch:** `fix/kotak-synthetic-indiavix-symtoken` (3 commits: `c9b3c7c05`,
+`0a1e94880`, `49972792f`), folded into `main-sync-2026-08-23` since acc3 was
+running ahead of `main-sync-2026-08-15` with these and no other sync branch
+had them yet.
+**Verified in production:** yes, on acc3 (Iqbal/Kotak).
+
+### Fix 1 — `broker/kotak/mapping/margin_data.py`: use `ordMrgn`, not `reqdMrgn`
+
+`reqdMrgn` is the shortfall beyond currently-available margin (0 for a
+well-funded account), not the order's actual cost — margin checks always
+returned 0 for accounts with enough headroom. `ordMrgn` holds the real
+per-order margin; `reqdMrgn` kept as a fallback.
+
+### Fix 2 — `broker/kotak/database/master_contract_db.py`: synthetic INDIAVIX SymToken row
+
+Kotak's own instrument master (`NSE_CM.csv`) never lists India VIX as an
+index (confirmed by direct inspection — exactly 4 `NSE_INDEX` rows, no VIX
+under any name). Kotak's neosymbol quotes endpoint can still serve VIX by
+name, but `services/quotes_service.py`'s `validate_symbol_exchange()`
+requires a `SymToken` row to exist first and rejects the request before
+any broker code runs. `_ensure_synthetic_index_rows()` inserts one
+placeholder row after every `master_contract_download()` refresh (which
+otherwise wipes and rebuilds the table from scratch) so the gate passes.
+
+### Fix 3 — `broker/kotak/api/data.py`: correct INDIAVIX neosymbol candidate name
+
+Kotak's neosymbol endpoint is case-sensitive — confirmed live that
+`INDIA VIX` (all caps) resolves and `India VIX` does not. Kept the old
+form as a second candidate in case Kotak's catalog varies.
+
+### Verification
+
+- `scripts/test_kotak_margin_ordmrgn.py`, `scripts/test_kotak_synthetic_vix_token.py`
+  — both pass (re-verified 2026-08-23 after folding into
+  `main-sync-2026-08-23`).
