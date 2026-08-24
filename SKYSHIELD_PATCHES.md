@@ -512,51 +512,66 @@ form as a second candidate in case Kotak's catalog varies.
 
 ---
 
-## 2026-08-24 — Kotak holdings: missing average_price/ltp showed as "-", Invested=0
+## 2026-08-24 — Kotak holdings: missing average_price showed as "-", Invested=0
 
 **Branch:** committed directly onto `main-sync-2026-08-23`
 **Verified in production:** yes — reported live by the user on acc3
 (Iqbal/Kotak), both in OpenAlgo's own Holdings page and in AlgoMirror
-(which reads the same OpenAlgo API and inherited the same bug).
+(which reads the same OpenAlgo API and inherited the same bug). Went
+through two iterations — the first one fixed OpenAlgo's own page but broke
+AlgoMirror's LTP in a different way; see below.
 
 ### Problem
 
 `broker/kotak/mapping/order_data.py`'s `transform_holdings_data()` never
-set `average_price` or `ltp` on the transformed row at all — unlike every
-other broker's mapping (see Zerodha's version, the reference
-implementation, which always includes both). The frontend has no fallback
-for a missing `average_price`, so it rendered `-`, and
-`invested = qty * (holding.average_price || 0)` collapsed to 0 — which
-then fed into wrong PnL/PnL% and allocation figures downstream, since
-those are computed from `invested`/`current`, not read directly off the
-broker's own `pnl`/`pnlpercent` fields.
+set `average_price` on the transformed row at all — unlike every other
+broker's mapping (see Zerodha's version, the reference implementation,
+which always includes it). The frontend has no fallback for a missing
+`average_price`, so it rendered `-`, and
+`invested = qty * (holding.average_price || 0)` collapsed to 0.
 
-Root cause: Kotak's holdings API reports `mktValue` and `holdingCost` as
-row *totals* (quantity already multiplied in), not per-share prices — the
-only two value fields transform_holdings_data actually read. There's no
-dedicated average-price or LTP field in Kotak's holdings response to map
-directly (unlike positions, which do have `avgnetprice`).
+### Fix (final)
 
-**Separately confirmed, not a bug**: the user also asked whether Kotak
-holdings should show T1/Pledged quantity breakdown like Zerodha's do (see
-the 2026-07-09 entry above). They don't, and that's already documented and
-deliberate — Kotak's official Neo SDK docs list only `quantity`/
-`sellableQuantity` for holdings, no pledge/T1 field, so it was left
-unpatched rather than guessed at. Quantity showing as a single raw number
-on Kotak is expected, not a bug.
+Kotak's holdings API does return a genuine per-share `averagePrice` field
+directly (confirmed by pulling a live raw response from acc3 — not
+documented in the official Kotak-Neo GitHub docs, which only list
+`mktValue`/`holdingCost` as row totals, but present in the actual
+response). Map it straight across: `average_price = round(averagePrice, 2)`.
 
-### Fix
+### First attempt (reverted) — do not reintroduce an `ltp` field here
 
-Derive both from the totals already being read, guarded against
-division-by-zero on a zero-quantity row:
-`average_price = holdingCost / quantity`, `ltp = mktValue / quantity`.
-`pnl`/`pnlpercent` computation unchanged (already correct, computed
-directly from `mktValue - holdingCost`, independent of average_price).
+The first fix also added a derived `ltp = mktValue / quantity` (Kotak's
+holdings response has no dedicated LTP field either). This looked correct
+in OpenAlgo's own Holdings page — but OpenAlgo's frontend has its own
+live-price overlay (WebSocket/MultiQuotes via `useLivePrice`) that
+overrides whatever the backend sends regardless, so it was masking the
+problem rather than testing it.
+
+**AlgoMirror caught it**: its holdings route only fetches a live quote to
+backfill `ltp` *when the backend's `ltp` is missing or zero*
+(`app/trading/routes.py::attach_day_change`, "backfills a missing/zero ltp
+... since Kotak never returns one"). Before this patch, Kotak's `ltp` was
+always absent, so that live backfill always ran — correctly. Adding a
+derived (and effectively stale — it's back-computed from Kotak's own
+holdings snapshot, not a live quote) `ltp` field made it non-falsy, so
+AlgoMirror silently stopped backfilling and displayed the stale value
+as if it were live. User caught this by comparing the two apps side by
+side: OpenAlgo showed live LTP 2409.20, AlgoMirror showed 2311.90 (the
+stale derived value) for the same holding at the same moment — everything
+downstream (Current, PnL, PnL%) was wrong in AlgoMirror as a result, while
+OpenAlgo's own page looked fine throughout (its overlay hid the defect).
+
+**Lesson**: don't add a field just because a downstream consumer's naive
+`|| 0` fallback would otherwise mask its absence — check whether another
+consumer relies on that field's *absence* as a signal to fetch something
+better itself. `average_price` was safe to add (nothing else needed it to
+stay unset). `ltp` was not.
 
 ### Verification
 
-- Synthetic test: 10 qty, mktValue=15000, holdingCost=12000 ->
-  average_price=1200.0, ltp=1500.0, pnl=3000.0, pnlpercent=25.0 (correct
-  by hand). Zero-quantity row -> average_price=0.0, ltp=0.0, no
-  ZeroDivisionError.
+- Synthetic test with WELCORP's real numbers (qty=58, mktValue=134090.2,
+  holdingCost=134763.0522, averagePrice=2323.5009): average_price=2323.50,
+  pnl=-672.85, pnlpercent=-0.50 (matches Kotak's own snapshot math) — no
+  `ltp` key present, confirming AlgoMirror's live-quote backfill will
+  fire again.
 - `uv run ruff check broker/kotak/mapping/order_data.py` — clean.
