@@ -509,3 +509,54 @@ form as a second candidate in case Kotak's catalog varies.
 - `scripts/test_kotak_margin_ordmrgn.py`, `scripts/test_kotak_synthetic_vix_token.py`
   — both pass (re-verified 2026-08-23 after folding into
   `main-sync-2026-08-23`).
+
+---
+
+## 2026-08-24 — Kotak holdings: missing average_price/ltp showed as "-", Invested=0
+
+**Branch:** committed directly onto `main-sync-2026-08-23`
+**Verified in production:** yes — reported live by the user on acc3
+(Iqbal/Kotak), both in OpenAlgo's own Holdings page and in AlgoMirror
+(which reads the same OpenAlgo API and inherited the same bug).
+
+### Problem
+
+`broker/kotak/mapping/order_data.py`'s `transform_holdings_data()` never
+set `average_price` or `ltp` on the transformed row at all — unlike every
+other broker's mapping (see Zerodha's version, the reference
+implementation, which always includes both). The frontend has no fallback
+for a missing `average_price`, so it rendered `-`, and
+`invested = qty * (holding.average_price || 0)` collapsed to 0 — which
+then fed into wrong PnL/PnL% and allocation figures downstream, since
+those are computed from `invested`/`current`, not read directly off the
+broker's own `pnl`/`pnlpercent` fields.
+
+Root cause: Kotak's holdings API reports `mktValue` and `holdingCost` as
+row *totals* (quantity already multiplied in), not per-share prices — the
+only two value fields transform_holdings_data actually read. There's no
+dedicated average-price or LTP field in Kotak's holdings response to map
+directly (unlike positions, which do have `avgnetprice`).
+
+**Separately confirmed, not a bug**: the user also asked whether Kotak
+holdings should show T1/Pledged quantity breakdown like Zerodha's do (see
+the 2026-07-09 entry above). They don't, and that's already documented and
+deliberate — Kotak's official Neo SDK docs list only `quantity`/
+`sellableQuantity` for holdings, no pledge/T1 field, so it was left
+unpatched rather than guessed at. Quantity showing as a single raw number
+on Kotak is expected, not a bug.
+
+### Fix
+
+Derive both from the totals already being read, guarded against
+division-by-zero on a zero-quantity row:
+`average_price = holdingCost / quantity`, `ltp = mktValue / quantity`.
+`pnl`/`pnlpercent` computation unchanged (already correct, computed
+directly from `mktValue - holdingCost`, independent of average_price).
+
+### Verification
+
+- Synthetic test: 10 qty, mktValue=15000, holdingCost=12000 ->
+  average_price=1200.0, ltp=1500.0, pnl=3000.0, pnlpercent=25.0 (correct
+  by hand). Zero-quantity row -> average_price=0.0, ltp=0.0, no
+  ZeroDivisionError.
+- `uv run ruff check broker/kotak/mapping/order_data.py` — clean.

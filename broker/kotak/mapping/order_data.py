@@ -271,24 +271,29 @@ def transform_holdings_data(holdings_data):
     logger.debug("Holdings Data")
     logger.debug(f"{holdings_data}")
     for holding in holdings_data:
+        quantity = float(holding.get("quantity", 0) or 0)
+        mkt_value = float(holding.get("mktValue", 0.0))
+        holding_cost = float(holding.get("holdingCost", 0.0))
+
+        # Kotak's holdings API reports mktValue/holdingCost as row totals, not
+        # per-share prices -- there's no dedicated average-price or LTP field
+        # in the response, so derive both from the totals rather than leaving
+        # them unset (which showed as "-" / Invested=0 in the UI, since the
+        # frontend has no fallback for a missing average_price).
+        average_price = round(holding_cost / quantity, 2) if quantity else 0.0
+        ltp = round(mkt_value / quantity, 2) if quantity else 0.0
+
         transformed_position = {
             "symbol": holding.get("displaySymbol", ""),
             "exchange": holding.get("exchangeSegment", ""),
             "quantity": holding.get("quantity", 0),
             "product": holding.get("instrumentType", ""),
-            "pnl": round(
-                (float(holding.get("mktValue", 0.0)) - float(holding.get("holdingCost", 0.0))), 2
-            ),
-            "pnlpercent": round(
-                (
-                    (float(holding.get("mktValue", 0.0)) - float(holding.get("holdingCost", 0.0)))
-                    / float(holding.get("holdingCost", 0.0))
-                    * 100
-                )
-                if float(holding.get("holdingCost", 0.0)) != 0
-                else 0,
-                2,
-            ),
+            "average_price": average_price,
+            "ltp": ltp,
+            "pnl": round(mkt_value - holding_cost, 2),
+            "pnlpercent": round((mkt_value - holding_cost) / holding_cost * 100, 2)
+            if holding_cost != 0
+            else 0,
         }
 
         transformed_data.append(transformed_position)
