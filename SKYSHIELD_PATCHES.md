@@ -636,3 +636,68 @@ and OpenAlgo's Telegram `/funds` both do) now sums to `Net`, matching the app.
   `MarginUsed`, so it overstates by open intraday margin (Net subtracts it).
   ~0 for these accounts (positions squared off daily); strategies carry util
   headroom.
+
+---
+
+## 2026-08-31 — Kotak streaming adapter: cross-thread greenlet.error (Kotak #1421)
+
+**Branch:** `main-sync-2026-08-23` (`broker/kotak/streaming/kotak_adapter.py`,
+`kotak_websocket.py`)
+**Upstream issue:** #1421 is the Zerodha version; this is the Kotak counterpart
+(not yet filed).
+**Upstream PR:** _pending_
+**Verified in production:** pending — deploy + verification bounce on acc3.
+
+### Problem
+
+acc3 (Kotak) OpenAlgo wedged 3x in one evening: `check_openalgo_reachable`
+times out on the public URL, skyshield sanity fails, crash loop; each cleared
+by an OpenAlgo restart. Root cause is the **Kotak edition of #1421**, never
+patched because acc1/acc2 are Zerodha.
+
+`kotak_adapter.py:46` and `kotak_websocket.py:28` both do
+`self._lock = threading.RLock()`. Under `gunicorn --worker-class eventlet`
+that is eventlet's Semaphore-based RLock, which is **not OS-thread-safe**. The
+Kotak order-update WebSocket (`kotak_order_adapter.py`) drops every ~6 min
+after-hours; its reconnect / ack-watchdog runs on a real `threading.Thread`
+and touches `self._lock` while the eventlet hub thread is in
+`fire_timers -> semaphore._do_acquire -> waiter.switch()` (the batch /
+reconnect Timer callbacks) -> `greenlet.error: Cannot switch to a different
+thread`. The gunicorn worker's greenlet hub is then corrupted and every HTTP
+request hangs. Compounded by `sqlite3.OperationalError: database is locked` on
+`INSERT INTO order_logs` from the wedged worker (same class as the 2026-08-13
+note above).
+
+Market hours have been fine (Aug 27 ran a full day, traded SENSEX IC) because
+the WS stays connected with an active session and doesn't churn.
+
+### Fix
+
+Mirror the Zerodha #1421 patch, scoped to `self._lock` only:
+
+```python
+if "eventlet" in sys.modules:
+    import eventlet
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
+...
+self._lock = _real_threading.RLock()   # real OS mutex
+```
+
+in `kotak_adapter.py` and `kotak_websocket.py`. **`_send_lock` is left as
+`threading.Lock()` (eventlet)** on purpose: it wraps the yielding
+`ws.hs_send()` and is contended only between green threads on one OS thread --
+converting it to a real OS lock risks the same deadlock the Zerodha note warns
+about for Timer/Thread. Timer/Thread are also left as eventlet primitives.
+
+### Verification (do on deploy)
+
+- `python -m py_compile` -- clean (done).
+- Bounce OpenAlgo on acc3, then within ~5 min confirm `/api/v1/history`,
+  `/api/v1/expiry`, `/api/v1/quotes` all respond (not just `/`), the market-data
+  WS still delivers a tick, and `journalctl` shows no `greenlet.error` /
+  deadlock. A hang on history/expiry = the real-OS-lock deadlock -> revert
+  (`git reset --hard 032851ef2` + restart).
+- Watch acc3 through a full session for recurrence of the wedge / any new
+  deadlock.

@@ -3,6 +3,7 @@ High-level, AliceBlue-style adapter for Kotak broker WebSocket streaming.
 Each instance is fully isolated and safe for multi-client use.
 """
 
+import sys
 import threading
 import time
 
@@ -13,6 +14,24 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from .kotak_websocket import KotakWebSocket
 
 logger = get_logger(__name__)
+
+# SkyShieldEdge patch (Kotak counterpart to upstream #1421): self._lock is
+# acquired from the WS event-loop thread (threading.Thread in kotak_websocket)
+# and from the eventlet hub thread (via the batch / reconnect Timer callbacks
+# below). eventlet's monkey-patched threading.RLock is its Semaphore, which is
+# not OS-thread-safe and crashes with "greenlet.error: Cannot switch to a
+# different thread" when a timer fires a waiter wake-up across thread
+# boundaries. Use a real OS mutex for self._lock only -- Timer/Thread stay as
+# eventlet primitives (the WS lib inside their callbacks needs the eventlet hub
+# for socket I/O; a real OS thread there deadlocks history/expiry/etc.).
+# _send_lock in kotak_websocket stays eventlet: it wraps a yielding hs_send()
+# and is contended only between green threads on one OS thread.
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 # HSI scrip operations: sub_type -> (feed family, is_unsubscribe). The family
 # groups a subscribe with its matching unsubscribe so the batcher can collapse
@@ -43,7 +62,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._broker_name = "kotak"
         self._auth_config = None
         self._connected = False
-        self._lock = threading.RLock()
+        self._lock = _real_threading.RLock()  # real OS mutex — see #1421 note above
 
         # Reconnection state
         self._running = False
