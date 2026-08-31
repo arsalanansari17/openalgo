@@ -575,3 +575,58 @@ stay unset). `ltp` was not.
   `ltp` key present, confirming AlgoMirror's live-quote backfill will
   fire again.
 - `uv run ruff check broker/kotak/mapping/order_data.py` — clean.
+
+---
+
+## 2026-08-31 — Kotak `availablecash` correct field (`CollateralValue`) — supersedes the 2026-08-23 Kotak part
+
+**Branch:** committed directly onto `main-sync-2026-08-23`
+**Upstream issue:** #1582 (comment added 2026-08-31 with the field mapping below;
+issue is CLOSED, owner said broker-balance fixes are queued — Kotak was never
+touched by any of the #1582 fix commits, upstream `main` still has the original
+double-counting formula)
+**Upstream PR:** none opened yet
+**Verified in production:** yes — mapping identified from acc3's (Iqbal/Kotak)
+real `/quick/user/limits` response, before and after pledging two holdings.
+
+### Problem
+
+The 2026-08-23 patch set Kotak `availablecash = RmsPayInAmt - RmsPayOutAmt`.
+That is only the **current day's fund pay-in/pay-out ledger delta** — it is `0`
+for any account that was not funded that same day. acc3 has Rs.1,79,543 cash
+(Kotak app "Cash balance") and `/api/v1/funds` returned `availablecash: 0.00`.
+
+Upstream `main` has a different bug: `availablecash = CollateralValue +
+RmsPayInAmt - RmsPayOutAmt + Collateral`, which equals `Net` (cash + collateral)
+and double-counts against the separate `collateral` field (issue #1582,
+@sbt987's screenshot).
+
+### Fix
+
+`availablecash = CollateralValue` (cash only). `collateral = Collateral`
+unchanged.
+
+Kotak's field names are counterintuitive — identified by comparing the raw
+response to the Kotak app's own Funds screen, before and after pledging:
+
+| Kotak app | Value | Raw field | Pre-pledge | Post-pledge |
+|---|---|---|---|---|
+| Cash balance | 1,79,543 | `CollateralValue` | 179542.8 | 179542.8 |
+| Margin from shares | 2,22,566 | `Collateral` | 0 | 222565.5 |
+| Available margin | 4,02,108 | `Net` | 179542.8 | 402108.1 |
+| Used margin | 0 | `MarginUsed` | 0 | 0.2 |
+
+`CollateralValue` tracks cash (unchanged by pledging); `Collateral` is the
+pledged-shares margin; `Net = CollateralValue + Collateral - MarginUsed` exactly.
+So `availablecash + collateral` (what SkyShieldAT's `_compute_lot_multiplier`
+and OpenAlgo's Telegram `/funds` both do) now sums to `Net`, matching the app.
+
+### Verification
+
+- acc3 raw `/quick/user/limits`: `CollateralValue=179542.8`,
+  `Collateral=222565.512`, `Net=402108.112`, `MarginUsed=0.2`.
+- Kotak app: Cash 1,79,543 + Margin from shares 2,22,566 = Available 4,02,108.
+- Minimal overstatement caveat: `CollateralValue + Collateral` ignores
+  `MarginUsed`, so it overstates by open intraday margin (Net subtracts it).
+  ~0 for these accounts (positions squared off daily); strategies carry util
+  headroom.
