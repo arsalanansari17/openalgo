@@ -435,7 +435,7 @@ it's the pre-fork original.
 **Upstream issue:** #1582 (already "fixed" upstream via `8a5e8700`/
 `7f9790ab`, both merged into `origin/main` — that fix is the same broken
 formula this patch replaces)
-**Upstream PR:** none opened yet
+**Upstream PR:** #1955 (against `origin/main`, opened 2026-08-31)
 **Verified in production:** yes — this exact content had been live on
 acc1/acc2 (`broker/zerodha/api/funds.py`) and acc3
 (`broker/kotak/api/funds.py`) as **uncommitted** VM edits since earlier in
@@ -585,7 +585,7 @@ stay unset). `ltp` was not.
 issue is CLOSED, owner said broker-balance fixes are queued — Kotak was never
 touched by any of the #1582 fix commits, upstream `main` still has the original
 double-counting formula)
-**Upstream PR:** none opened yet
+**Upstream PR:** #1955 (against `origin/main`, opened 2026-08-31)
 **Verified in production:** yes — mapping identified from acc3's (Iqbal/Kotak)
 real `/quick/user/limits` response, before and after pledging two holdings.
 
