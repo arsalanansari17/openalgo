@@ -580,14 +580,20 @@ stay unset). `ltp` was not.
 
 ## 2026-08-31 — Kotak `availablecash` correct field (`CollateralValue`) — supersedes the 2026-08-23 Kotak part
 
-**Branch:** committed directly onto `main-sync-2026-08-23`
-**Upstream issue:** #1582 (comment added 2026-08-31 with the field mapping below;
-issue is CLOSED, owner said broker-balance fixes are queued — Kotak was never
-touched by any of the #1582 fix commits, upstream `main` still has the original
-double-counting formula)
-**Upstream PR:** #1955 (against `origin/main`, opened 2026-08-31)
+**Status: MERGED UPSTREAM — retire this patch on the next `origin/main` sync.**
+Upstream squash-merged our version verbatim; our local `1eb0462f2` will conflict
+with `origin/main` `05a137423` on the next rebase/merge — resolve by taking
+either side (identical behaviour and text).
+
+**Branch:** committed directly onto `main-sync-2026-08-23` (`1eb0462f2`)
+**Upstream issue:** #1582 (CLOSED; PR below cross-references it. Direct comment
+with the field mapping was blocked by tooling — text kept in session notes)
+**Upstream PR:** #1955 — **MERGED to `origin/main` as `05a137423` on
+2026-08-31 09:30 UTC** by marketcalls.
 **Verified in production:** yes — mapping identified from acc3's (Iqbal/Kotak)
 real `/quick/user/limits` response, before and after pledging two holdings.
+Deployed + `funds()`-verified on acc3 (`availablecash '179542.80'`,
+`collateral '222565.51'`).
 
 ### Problem
 
