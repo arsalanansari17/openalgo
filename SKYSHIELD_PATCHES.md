@@ -701,3 +701,44 @@ about for Timer/Thread. Timer/Thread are also left as eventlet primitives.
   (`git reset --hard 032851ef2` + restart).
 - Watch acc3 through a full session for recurrence of the wedge / any new
   deadlock.
+
+---
+
+## 2026-09-01 — Kotak get_multiquotes batch 50 -> 25 (re-applied; caused a missed live entry)
+
+**Branch:** `main-sync-2026-08-23` (`broker/kotak/api/data.py`)
+**Upstream issue:** filed 2026-09-01 (Kotak get_multiquotes / option-chain 50-cap).
+**Upstream PR:** #1959 was opened 2026-08-31 then closed when this was first
+reverted; re-raise or reopen.
+**Verified in production:** yes -- the 400 broke acc3's first live IronCondor
+entry (2026-09-01, NIFTY 0-DTE): `option_chain_service` requested
+`strike_count=all` -> 231 strikes -> 462 symbols -> `get_multiquotes` first
+50-batch -> HTTP 400 -> `No short call strike found` -> "Strike selection
+FAILED, no trade".
+
+### Why this regressed (it "worked for a month in sandbox")
+
+Not a sandbox-vs-live difference -- quotes are never sandboxed. It's the
+OpenAlgo bump: acc3 ran `2.0.2.1` (`main-sync-2026-08-13`) during the sandbox
+month; the sync to `2.0.3` (`main-sync-2026-08-23` + ~230 upstream commits)
+included a rework of `services/option_chain_service.py` (live greeks, quote
+lookup, weighted rate limiting). `SkyShieldAT.fetch_option_chain` calls
+`optionchain()` with no `strike_count`, which now resolves to `all` (231 NIFTY
+strikes) where the old version returned a bounded ATM window (~40 symbols, one
+sub-50 batch). Zerodha (acc1/acc2) is unaffected -- its `BATCH_SIZE = 500`
+swallows 462 in one request.
+
+### Fix
+
+`BATCH_SIZE = 25` (was 50). Robust to any chain width. This was originally
+applied 2026-08-31 as `63f353139`/PR #1959, reverted the same night ("keep 50,
+no error seen"), then re-applied here after it broke the live entry. A
+complementary SkyShieldAT-side change (`fetch_option_chain(strike_count=20)`)
+would cut load but 82 symbols still needs 2 Kotak batches, so `BATCH_SIZE` is
+the load-bearing fix.
+
+### Verification
+
+- `python -m py_compile broker/kotak/api/data.py` -- clean.
+- Deploy to acc3, restart OpenAlgo, call `optionchain(NIFTY)` and confirm it
+  returns a full strike list with no "Neo symbol max value to 50" in the log.
