@@ -751,7 +751,8 @@ the load-bearing fix.
 onto `main-sync-2026-08-23` for `broker/kotak/mapping/order_data.py`)
 **Upstream issue:** [#1970](https://github.com/marketcalls/openalgo/issues/1970)
 (filed 2026-09-02).
-**Upstream PR:** _not yet opened - opening after live verification on acc3._
+**Upstream PR:** [#1971](https://github.com/marketcalls/openalgo/pull/1971)
+(opened 2026-09-02, after live verification below).
 **Verified in production:** yes - see below.
 
 ### Problem
@@ -813,6 +814,6 @@ docs specify, not a reconstruction.
   - Synthetic carry-forward-closed-today case (10 carried forward @
     `cfBuyAmt=450`, 10 sold fresh @ `sellAmt=500`): `pnl = 50.0`, confirming
     `cfBuyAmt` is actually included (the case that stalled #1224).
-- Deploy to acc3, restart OpenAlgo, re-fetch positionbook for the same 4
-  SENSEX legs and confirm `pnl` now appears and sums to `988.0` live (not
-  just in the isolated test).
+- Deployed to acc3, restarted OpenAlgo, re-fetched positionbook for the same
+  4 SENSEX legs through the actual running service - `pnl` matched the
+  isolated test exactly (`169.0`, `-783.0`, `-860.0`, `2462.0`, sum `988.0`).
