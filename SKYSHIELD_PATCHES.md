@@ -825,8 +825,10 @@ docs specify, not a reconstruction.
 **Branch:** `feat/kotak-positions-ltp-backfill` (clean, off `origin/main`;
 cherry-picked onto `main-sync-2026-08-23` for `broker/kotak/api/order_api.py`
 and `broker/kotak/mapping/order_data.py`)
-**Upstream issue:** _not yet filed._
-**Upstream PR:** _not yet opened - opening after live verification on acc3._
+**Upstream issue:** [#1972](https://github.com/marketcalls/openalgo/issues/1972)
+(filed 2026-09-02).
+**Upstream PR:** [#1973](https://github.com/marketcalls/openalgo/pull/1973)
+(opened 2026-09-02, after live verification below).
 **Verified in production:** yes - see below.
 
 ### Problem
@@ -881,6 +883,8 @@ endpoint itself.
   batched `get_multiquotes` call for all 4 symbols returned real market
   LTPs (`27.9`, `131.75`, `60.6`, `313.6`), all previously showing no price
   at all.
-- Deploy to acc3, restart OpenAlgo, re-fetch positionbook for the same 4
-  legs through the actual running service and confirm `ltp` now appears
-  and matches the values above live (not just in the isolated test).
+- Deployed to acc3, restarted OpenAlgo, re-fetched positionbook for the same
+  4 legs through the actual `services/positionbook_service.get_positionbook()`
+  pipeline (not just the isolated test) - `ltp` matched the values above
+  exactly, and `pnl` (from the earlier entry) appeared alongside it on the
+  same rows.
