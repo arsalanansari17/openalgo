@@ -817,3 +817,70 @@ docs specify, not a reconstruction.
 - Deployed to acc3, restarted OpenAlgo, re-fetched positionbook for the same
   4 SENSEX legs through the actual running service - `pnl` matched the
   isolated test exactly (`169.0`, `-783.0`, `-860.0`, `2462.0`, sum `988.0`).
+
+---
+
+## 2026-09-02 — Kotak positions: no LTP reported at all (open or closed)
+
+**Branch:** `feat/kotak-positions-ltp-backfill` (clean, off `origin/main`;
+cherry-picked onto `main-sync-2026-08-23` for `broker/kotak/api/order_api.py`
+and `broker/kotak/mapping/order_data.py`)
+**Upstream issue:** _not yet filed._
+**Upstream PR:** _not yet opened - opening after live verification on acc3._
+**Verified in production:** yes - see below.
+
+### Problem
+
+Found alongside the closed-position `pnl` gap above: Kotak's positions
+endpoint never returns a live price field at all, for an open position or a
+closed one. Confirmed against the raw `/quick/user/positions` response (no
+`ltp`-like field anywhere) and against Kotak's own SDK docs
+(`Kotak-Neo/kotak-neo-api-v2` `docs/Positions.md`), whose "Profit N Loss"
+formula treats LTP as an external input the caller must supply - not
+something the endpoint itself returns. Zerodha's equivalent
+`transform_positions_data` already reads `last_price` straight from Kite,
+so this is Kotak-specific, and it's missing from OpenAlgo's own Positions
+page too, not just AlgoMirror (AlgoMirror already worked around it for open
+positions via its own client-side batched `multiquotes()` call - see
+`app/trading/routes.py`'s `backfill_missing_ltp()` in the AlgoMirror repo -
+but that's a per-consumer patch, not a fix at the source).
+
+### Fix
+
+Added `_backfill_ltp(response, auth_token)` in `order_api.py`, called from
+`get_positions()` right after the raw fetch:
+
+1. Resolve each raw position's OpenAlgo symbol/exchange using the same
+   `_openalgo_symbol()` helper `map_position_data` already uses for
+   orders/trades (read-only - doesn't mutate `trdSym`/`exSeg` on the raw
+   dict, since `get_positions()` must keep returning genuinely raw,
+   unmapped data for its other caller in the pipeline).
+2. One batched `BrokerData(auth_token).get_multiquotes()` call for every
+   position needing a price - not one call per position, which is the
+   per-symbol-latency concern that stalled the earlier, unrelated Kotak P&L
+   PR #1224. `get_multiquotes` already handles Kotak's own <50-symbol batch
+   cap internally (see the 2026-09-01 entry above).
+3. Stamp a `_ltp` scratch field onto each raw position (not the final `ltp`
+   key, since resolution happens before `map_position_data` runs).
+4. `transform_positions_data()` reads `_ltp` into `ltp`, matching Zerodha's
+   key/shape exactly (`round(value, 2)`, always present, defaults to `0.0`
+   if the backfill couldn't resolve a quote for that symbol).
+
+Best-effort and non-fatal by design: any failure (bad auth, quotes endpoint
+down, unresolvable symbol) just leaves positions without a price, exactly
+as before this function existed - it must never break the positions
+endpoint itself.
+
+### Verification
+
+- `python -m py_compile broker/kotak/api/order_api.py broker/kotak/mapping/order_data.py` -- clean.
+- Symbol resolution verified against Iqbal's 4 real closed SENSEX legs
+  today - all 4 resolved correctly (e.g. `SENSEX2690376900CE` (raw) ->
+  `SENSEX03SEP2676900CE` / `BFO` (OpenAlgo-normalized)).
+- Full backfill verified end-to-end against the same live account: one
+  batched `get_multiquotes` call for all 4 symbols returned real market
+  LTPs (`27.9`, `131.75`, `60.6`, `313.6`), all previously showing no price
+  at all.
+- Deploy to acc3, restart OpenAlgo, re-fetch positionbook for the same 4
+  legs through the actual running service and confirm `ltp` now appears
+  and matches the values above live (not just in the isolated test).
