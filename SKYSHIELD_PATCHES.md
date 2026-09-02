@@ -742,3 +742,77 @@ the load-bearing fix.
 - `python -m py_compile broker/kotak/api/data.py` -- clean.
 - Deploy to acc3, restart OpenAlgo, call `optionchain(NIFTY)` and confirm it
   returns a full strike list with no "Neo symbol max value to 50" in the log.
+
+---
+
+## 2026-09-02 — Kotak positions: no `pnl` reported for fully-closed legs
+
+**Branch:** `fix/kotak-closed-position-pnl` (clean, off `origin/main`; cherry-picked
+onto `main-sync-2026-08-23` for `broker/kotak/mapping/order_data.py`)
+**Upstream issue:** [#1970](https://github.com/marketcalls/openalgo/issues/1970)
+(filed 2026-09-02).
+**Upstream PR:** _not yet opened - opening after live verification on acc3._
+**Verified in production:** yes - see below.
+
+### Problem
+
+`transform_positions_data()` never emits a `pnl` key for positions at all
+(`transform_holdings_data`, two functions below in the same file, already
+does this for holdings - this function just never got the same treatment).
+For a fully-closed leg it also falls through every `average_price` branch,
+landing on Kotak's raw `avgnetprice` (0.0 once flat) - which per Kotak's own
+docs is the *correct* documented value, so that part isn't a bug.
+
+Found while investigating why AlgoMirror showed ₹0.00 P&L for Iqbal's closed
+NIFTY option legs. Confirmed against his real account today: 4 fully-closed
+SENSEX legs (`cfBuyQty`/`cfSellQty` = 0, `flBuyQty` = `flSellQty` on each) -
+OpenAlgo reported no `pnl` field on any of them, while the real combined
+realized P&L (hand-computed from the raw `buyAmt`/`sellAmt`) was **+₹988.00**.
+
+### Fix
+
+Kotak's own SDK docs (`Kotak-Neo/kotak-neo-api-v2` `docs/Positions.md`,
+"Profit N Loss" section) document:
+
+    PnL = (Total Sell Amt - Total Buy Amt) + Net Qty * LTP * multiplier * (genNum/genDen) * (prcNum/prcDen)
+    Total Buy Amt = cfBuyAmt + buyAmt, Total Sell Amt = cfSellAmt + sellAmt
+
+For a fully-closed leg (Net Qty = 0) this reduces to `sellAmt - buyAmt`,
+generalized with `cfBuyAmt`/`cfSellAmt` so a position carried forward and
+closed today still gets its full realized P&L, not just today's fresh-leg
+slice. Added as a fourth branch (only reachable when quantity == 0, since
+the existing three branches already exhaust every non-zero case) in
+`transform_positions_data()`:
+
+```python
+elif buy_qty + cf_buy_qty > 0:
+    total_buy_amt = float(position.get("cfBuyAmt", 0)) + float(position.get("buyAmt", 0))
+    total_sell_amt = float(position.get("cfSellAmt", 0)) + float(position.get("sellAmt", 0))
+    transformed_position["pnl"] = round(total_sell_amt - total_buy_amt, 2)
+```
+
+Scoped narrowly to the closed-position case only - open positions are left
+for callers (AlgoMirror already does this via its own LTP-based derivation)
+to compute unresolved P&L themselves. Two earlier community PRs (#1220,
+#1224, April 2026) attempting a broader Kotak P&L fix in `api/funds.py` were
+closed unmerged after a maintainer flagged unhandled carry-forward math and
+per-position LTP-call performance concerns - this fix avoids both: no new
+network calls, and carry-forward is handled via the same fields Kotak's own
+docs specify, not a reconstruction.
+
+### Verification
+
+- `python -m py_compile broker/kotak/mapping/order_data.py` -- clean.
+- Isolated unit test of the new branch (function body extracted and run
+  standalone, no DB dependency) against three cases:
+  - Real data (Iqbal's 4 closed SENSEX legs today): individual `pnl` values
+    of `169.0`, `-783.0`, `-860.0`, `2462.0` - sum `988.0`, matching the
+    hand-computed total exactly.
+  - Open position (ENGINERSIN, qty 505): unaffected - no `pnl` key added,
+    `average_price` unchanged at `279.0`.
+  - Synthetic carry-forward-closed-today case (10 carried forward @
+    `cfBuyAmt=450`, 10 sold fresh @ `sellAmt=500`): `pnl = 50.0`, confirming
+    `cfBuyAmt` is actually included (the case that stalled #1224).
+- Deploy to acc3, restart OpenAlgo, re-fetch positionbook for the same 4
+  SENSEX legs and confirm `pnl` now appears and sums to `988.0` live (not
+  just in the isolated test).
