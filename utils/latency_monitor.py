@@ -285,7 +285,7 @@ def track_latency(api_type):
                         "total": total,
                     },
                     "SUCCESS" if status_code < 400 else "FAILED",
-                    response_data.get("message") if status_code >= 400 else None,
+                    str(response_data.get("message")) if status_code >= 400 else None,
                     _session_broker() if not request_data.get("apikey") else None,
                 )
 

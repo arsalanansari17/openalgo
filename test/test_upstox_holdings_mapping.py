@@ -21,6 +21,8 @@ def test_transform_holdings_uses_standard_ltp_contract():
             "symbol": "INFY",
             "exchange": "NSE",
             "quantity": 2,
+            "t1_quantity": 0,
+            "pledged_quantity": 0,
             "product": "D",
             "average_price": 100.0,
             "ltp": 120.0,

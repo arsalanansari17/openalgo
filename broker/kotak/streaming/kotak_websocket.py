@@ -5,6 +5,7 @@ Enhanced with partial update handling like AliceBlue's tick feed processing.
 """
 
 import json
+import sys
 import threading
 import time
 from collections import deque
@@ -14,6 +15,20 @@ from utils.logging import get_logger
 from .HSWebSocketLib import HSWebSocket
 
 logger = get_logger(__name__)
+
+# SkyShieldEdge patch (Kotak counterpart to upstream #1421): self._lock is
+# acquired from the WS event-loop thread and from the eventlet hub thread.
+# eventlet's monkey-patched threading.RLock is its Semaphore, not OS-thread-safe
+# -- crashes with "greenlet.error: Cannot switch to a different thread". Real OS
+# mutex for self._lock only. _send_lock stays eventlet: it wraps the yielding
+# ws.hs_send() and only serialises green threads on one OS thread; a real OS
+# lock there could deadlock across a send that yields to the hub.
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 
 class KotakWebSocket:
@@ -25,7 +40,7 @@ class KotakWebSocket:
         self.auth_config = auth_config.copy()
         self.ws_url = ws_url
         self.ws = HSWebSocket()
-        self._lock = threading.RLock()
+        self._lock = _real_threading.RLock()  # real OS mutex — see #1421 note above
         self._send_lock = threading.Lock()  # Serialize WebSocket sends to prevent frame corruption
         self.ws._send_lock = self._send_lock  # Share lock with HSWebSocket for ack sends
         self._subscriptions = set()  # (exchange, token, type)

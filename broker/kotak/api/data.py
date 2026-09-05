@@ -68,7 +68,9 @@ class BrokerData:
                 "NIFTY MID SELECT",
             ],
             "NIFTYNXT50": ["Nifty Next 50"],
-            "INDIAVIX": ["India VIX"],
+            # Kotak's neosymbol endpoint is case-sensitive; confirmed live
+            # that "INDIA VIX" (all caps) resolves and "India VIX" does not.
+            "INDIAVIX": ["INDIA VIX", "India VIX"],
             "SENSEX": ["SENSEX"],
             "BANKEX": ["BANKEX"],
         }

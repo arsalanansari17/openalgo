@@ -603,6 +603,8 @@ def transform_holdings_data(holdings_data):
             "symbol": holding.get("tradingsymbol", ""),
             "exchange": holding.get("exchange", ""),
             "quantity": holding.get("quantity", 0),
+            "t1_quantity": holding.get("t1_quantity", 0),
+            "pledged_quantity": holding.get("pledged_quantity", 0),
             "product": holding.get("product", ""),
             "average_price": holding.get("average_price", 0.0),
             "ltp": holding.get("ltp", 0.0),
@@ -676,6 +678,8 @@ def map_portfolio_data(portfolio_data):
             "tradingsymbol": tradingsymbol,
             "exchange": exchange,
             "quantity": h.get("quantity", 0) or 0,
+            "t1_quantity": h.get("t1_quantity", 0) or 0,
+            "pledged_quantity": h.get("pledged_quantity", 0) or 0,
             "product": "CNC",  # Holdings are always delivery
             "average_price": round(avg_price, 2),
             "ltp": round(ltp, 2),

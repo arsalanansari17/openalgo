@@ -14,13 +14,21 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from database.auth_db import get_auth_token
+from database.auth_db import get_auth_token_no_cache
 from database.token_db import get_token
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
 # Import the WebSocket client
 from .zerodha_websocket import ZerodhaWebSocket
 
+# SkyShieldEdge patch (#1421): self.lock is acquired from both the asyncio WS
+# proxy thread (via adapter.subscribe() called from server.subscribe_client())
+# and the eventlet hub thread (via the batch timer callback). eventlet's
+# monkey-patched threading.Lock is its Semaphore, which is not OS-thread-safe
+# and crashes with greenlet.error: Cannot switch to a different thread when
+# its waiter wake-up fires across thread boundaries. Use a real OS mutex for
+# self.lock only — Timer/Thread stay as eventlet primitives because the
+# WebSocket library inside their callbacks needs the eventlet hub for I/O.
 if "eventlet" in sys.modules:
     import eventlet
 
@@ -84,13 +92,15 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.api_key:
                 return {"status": "error", "message": "API key not found in environment variables"}
 
-            # Get auth token from database. bypass_cache=True so the initial
-            # connect reads the current token straight from the DB rather than a
-            # possibly-stale auth cache. Under Docker the WS proxy runs as a
-            # separate process with its own cache that is only synced via a
-            # best-effort ZMQ broadcast, so a stale entry here would otherwise
-            # build the adapter with yesterday's dead token and 403 (#1419).
-            auth_token = get_auth_token(user_id, bypass_cache=True)
+            # Get auth token from database. The no-cache variant queries the DB
+            # directly and never touches auth_cache's dict operations at all —
+            # both because a fresh token is wanted (Docker separate-process
+            # cache can be stale, #1419) and because touching TTLCache's
+            # monkey-patched RLock from this asyncio OS thread crashes with
+            # greenlet.error (#1421). Plain bypass_cache=True on get_auth_token
+            # still does `cache_key in auth_cache` / `del` / `auth_cache[key] =`
+            # — all of which touch that same lock — so it is not safe here.
+            auth_token = get_auth_token_no_cache(user_id)
             if not auth_token:
                 return {"status": "error", "message": "Authentication token not found"}
 
@@ -171,9 +181,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.batch_timer:
             self.batch_timer.cancel()
 
-        self.batch_timer = _real_threading.Timer(
-            self.batch_delay, self._process_batch_subscriptions
-        )
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
         self.batch_timer.start()
 
     def _process_batch_subscriptions(self):
