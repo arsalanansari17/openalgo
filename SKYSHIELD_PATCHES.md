@@ -998,3 +998,87 @@ endpoint itself.
   pipeline (not just the isolated test) - `ltp` matched the values above
   exactly, and `pnl` (from the earlier entry) appeared alongside it on the
   same rows.
+
+---
+
+## 2026-09-06 — Tradebook: wrong timestamp field (Zerodha), dropped per-fill trade_id (Zerodha + Kotak)
+
+**Branch:** `fix/tradebook-trade-id-fill-timestamp` (clean, off `origin/main`;
+cherry-picked onto this branch for `broker/zerodha/mapping/order_data.py` and
+`broker/kotak/mapping/order_data.py`)
+**Upstream issue:** [#2006](https://github.com/marketcalls/openalgo/issues/2006)
+(filed 2026-09-06).
+**Upstream PR:** [#2007](https://github.com/marketcalls/openalgo/pull/2007)
+(opened 2026-09-06).
+**Verified in production:** not yet - all 3 VMs are off for the weekend as
+this lands (Saturday night). See Verification below for why this doesn't
+block landing the fix anyway.
+
+### Problem
+
+Found while scoping a consolidated multi-day P&L feature (needs a stable
+per-fill dedup key and reliable per-trade dates - see the AlgoMirror
+conversation this originated from). Two gaps in `transform_tradebook_data()`:
+
+1. **Zerodha uses `order_timestamp` for a trade's timestamp.** Kite's own
+   docs (kite.trade/docs/connect/v3/orders/) document three distinct
+   timestamps: `order_timestamp` ("when the order was registered by the
+   API" - order-level, identical across every fill under one multi-fill
+   order), `exchange_timestamp` ("when the order was registered by the
+   exchange"), and `fill_timestamp` ("when the trade was filled at the
+   exchange") - the one actually correct for a per-trade record.
+   `order_timestamp`'s order-level semantics are very likely the root cause
+   of AlgoMirror `KNOWN_ISSUES.md` #2: one account's Trade Book rows showed
+   bare `HH:MM:SS` with no date, an identical code path on another account
+   showed full datetimes for the same day - not confirmed at the time
+   (2026-08-18) for lack of raw-response access, now explained by
+   documented field semantics rather than a Kite quirk.
+2. **`trade_id` (Zerodha) / `flId` (Kotak) dropped entirely** for both
+   brokers - only `orderid`/`nOrdNo` survived, shared by every fill under
+   one order, leaving no stable per-fill identity to dedup a repeated
+   tradebook pull against.
+
+### Corroboration already in the codebase
+
+`blueprints/pnltracker.py` (lines 318-319) already falls back to
+`fill_timestamp` when `timestamp` looks wrong:
+```python
+trade_timestamp = (
+    trade.get("timestamp") or trade.get("fill_timestamp") or trade.get("fill_time")
+)
+```
+This is a workaround for exactly this gap, applied at the point of use
+instead of at the source - independent evidence the wrong field was already
+suspected.
+
+### Fix
+
+Zerodha:
+```python
+"trade_id": trade.get("trade_id", ""),
+"timestamp": trade.get("fill_timestamp") or trade.get("order_timestamp", ""),
+```
+Kotak (per Kotak-Neo/kotak-neo-api-v2 `docs/Trade_report.md` - two fills
+under one `nOrdNo` carry two distinct `flId` values in the documented
+sample response):
+```python
+"trade_id": trade.get("flId", ""),
+```
+Kotak's existing `timestamp: trade.get("exTm", "")` is already correct
+(full-datetime exchange execution time) - no change needed there.
+
+### Verification
+
+- `python -m py_compile` on both files - clean.
+- Confirmed `services/tradebook_service.py`'s `format_trade_data()` passes
+  every dict key through generically with no allowlist, so `trade_id`
+  reaches consumers with zero other code changes needed.
+- Live confirmation against a real account deferred to next market open -
+  this fix rests on Kite's/Kotak's own documented field semantics rather
+  than a computed value, so (unlike the pnl/LTP fixes above) it doesn't
+  need a live numeric check before the reasoning holds; filed upstream
+  alongside the fix rather than after, on that basis.
+- Next step once a VM is back up: pull a real trade with `flId`/`trade_id`
+  set, confirm the new fields appear, and specifically check iram's (acc2)
+  Trade Book page for whether the missing-date symptom from
+  `KNOWN_ISSUES.md` #2 is actually gone now.
