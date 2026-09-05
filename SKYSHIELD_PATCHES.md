@@ -1001,7 +1001,7 @@ endpoint itself.
 
 ---
 
-## 2026-09-06 — Tradebook: wrong timestamp field (Zerodha), dropped per-fill trade_id (Zerodha + Kotak)
+## 2026-09-06 — Tradebook: wrong timestamp field (Zerodha), dropped per-fill tradeid (Zerodha + Kotak)
 
 **Branch:** `fix/tradebook-trade-id-fill-timestamp` (clean, off `origin/main`;
 cherry-picked onto this branch for `broker/zerodha/mapping/order_data.py` and
@@ -1038,6 +1038,11 @@ conversation this originated from). Two gaps in `transform_tradebook_data()`:
    one order, leaving no stable per-fill identity to dedup a repeated
    tradebook pull against.
 
+**Update (same day, before landing):** cubic-dev-ai's review on PR #2007
+caught that the first pass emitted this as `trade_id` (underscore), which
+isn't the field OpenAlgo's own tradebook contract or existing consumers
+expect - see Fix below.
+
 ### Corroboration already in the codebase
 
 `blueprints/pnltracker.py` (lines 318-319) already falls back to
@@ -1055,30 +1060,44 @@ suspected.
 
 Zerodha:
 ```python
-"trade_id": trade.get("trade_id", ""),
+"tradeid": trade.get("trade_id", ""),
 "timestamp": trade.get("fill_timestamp") or trade.get("order_timestamp", ""),
 ```
 Kotak (per Kotak-Neo/kotak-neo-api-v2 `docs/Trade_report.md` - two fills
 under one `nOrdNo` carry two distinct `flId` values in the documented
 sample response):
 ```python
-"trade_id": trade.get("flId", ""),
+"tradeid": trade.get("flId", ""),
 ```
 Kotak's existing `timestamp: trade.get("exTm", "")` is already correct
 (full-datetime exchange execution time) - no change needed there.
+
+The output key is `tradeid` (no underscore), not `trade_id` - this is
+OpenAlgo's own documented tradebook contract
+(`docs/prompt/flow-import-format.md`, `docs/design/07-sandbox/README.md`)
+and is already read by shipped consumers
+(`services/telegram_bot_service_fixed.py`,
+`services/telegram_bot_service_v2.py`, `sandbox/execution_engine.py`,
+`sandbox/position_manager.py`) and already emitted the same way by
+`broker/groww/mapping/order_data.py`. The first pass used `trade_id`
+(underscore), which cubic-dev-ai's review on PR #2007 caught as invisible
+to all of the above; corrected before landing.
 
 ### Verification
 
 - `python -m py_compile` on both files - clean.
 - Confirmed `services/tradebook_service.py`'s `format_trade_data()` passes
-  every dict key through generically with no allowlist, so `trade_id`
+  every dict key through generically with no allowlist, so `tradeid`
   reaches consumers with zero other code changes needed.
+- Confirmed the `tradeid` naming convention directly against the
+  codebase (docs + existing consumers + Groww's own adapter) rather than
+  taking cubic-dev-ai's review comment at face value.
 - Live confirmation against a real account deferred to next market open -
   this fix rests on Kite's/Kotak's own documented field semantics rather
   than a computed value, so (unlike the pnl/LTP fixes above) it doesn't
   need a live numeric check before the reasoning holds; filed upstream
   alongside the fix rather than after, on that basis.
 - Next step once a VM is back up: pull a real trade with `flId`/`trade_id`
-  set, confirm the new fields appear, and specifically check iram's (acc2)
-  Trade Book page for whether the missing-date symptom from
-  `KNOWN_ISSUES.md` #2 is actually gone now.
+  set, confirm `tradeid` appears in the API response, and specifically
+  check iram's (acc2) Trade Book page for whether the missing-date symptom
+  from `KNOWN_ISSUES.md` #2 is actually gone now.
