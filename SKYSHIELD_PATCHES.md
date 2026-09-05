@@ -62,6 +62,18 @@ B:f)` per file, never ambiguous range diffs after one gave a backwards read on
     `t1_quantity`/`pledged_quantity` + a `totalQuantity()` helper so the
     live-price qty math (P&L weighting, zero-qty gating) covers the full
     held quantity, not just the free portion.
+- **Regression caught post-deploy, fixed and filed upstream:** taking
+  `broker/kotak/mapping/order_data.py` wholesale (see "Retired" below) dropped
+  `average_price` from `transform_holdings_data()` -- verified
+  `transform_positions_data` carefully in this same file and wrongly
+  generalized that verification to the whole file, missing the OTHER function
+  in it. Caught live on acc3 (Holdings page showing "-" for every Average
+  Price). Fixed by re-adding `"average_price": round(float(holding.get(
+  "averagePrice", 0.0)), 2)` -- Kotak's `/holdings` response carries this
+  field directly, no LTP-style backfill needed. Re-verified every function's
+  output keys in both `order_data.py` and `order_api.py` against the
+  pre-upgrade fork afterward; this was the only dropped field in either file.
+  Filed upstream: issue #2000, PR #2001 (fork commit `b9b0c15cc`).
 - **Retired (superseded by a better upstream fix, not carried forward):**
   - `broker/kotak/api/funds.py`, `broker/kotak/api/order_api.py`,
     `broker/kotak/mapping/order_data.py` -- our local `_backfill_ltp`/
