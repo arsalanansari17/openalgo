@@ -318,7 +318,7 @@ value, so "pnl.db" was a misleading name from the start. Safe to rename
 outright (no migration needed) since every VM's copy was still empty at
 the time.
 
-### Day-wise / Trade-wise toggle
+### Day-wise / Scrip-wise toggle
 
 Added 2026-09-06 after the 7-day-default/Fetch-button round on Trade Book:
 `PnlHistory.tsx` previously rendered both the Daily Breakdown table and the
@@ -328,10 +328,26 @@ P&L report, which shows either its "Day-wise" or "Scrip-wise" view, never
 both. Implemented with the existing `Tabs`/`TabsList`/`TabsTrigger`
 primitives (`frontend/src/components/ui/tabs.tsx`, already in the design
 system, unused until now) rather than adding a new toggle component - a
-`view: 'day' | 'trade'` state var controls which Card renders, defaulting
-to `'day'`. No new fetch is triggered by switching tabs; both `daily` and
-`closedTrades` are already in state from the last Fetch, so the toggle is
-purely a client-side render switch.
+`view: 'day' | 'scrip'` state var controls which Card renders, defaulting
+to `'day'`. No new fetch is triggered by switching tabs; `closedTrades` is
+already in state from the last Fetch, so the toggle is purely a
+client-side render switch.
+
+**Scrip-wise aggregation** (same day, immediate follow-up): the second tab
+first shipped as a flat list of every FIFO-matched lot (one row per
+entry/exit pair, labeled "Trade-wise"). User then asked to merge rows by
+symbol instead - confirmed via web search that this is the real Scrip-wise
+convention (Zerodha's own Tax P&L equity sheet reports buy value, sell
+value and P&L per scrip, not per lot; "all brokers follow this" per the
+user). Replaced the flat list with a `scripRows` aggregation
+(`useMemo` over `closedTrades`, grouped by `symbol|exchange|product`):
+`entry_action` on each lot says which leg was the entry, so a `BUY`-entry
+lot's buy value is its entry leg and sell value its exit leg, and a
+`SELL`-entry lot (a short) is the reverse - summed per group into total
+quantity, buy value, sell value, trade count, and net realized P&L. Tab
+renamed "Trade-wise" -> "Scrip-wise" to match; the per-lot Entry/Exit price
+columns were dropped from the table since they stop being meaningful once
+multiple lots at different prices are merged into one row.
 
 ### Heat maps
 

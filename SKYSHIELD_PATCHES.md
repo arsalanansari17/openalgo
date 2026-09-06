@@ -1380,19 +1380,42 @@ Trade-wise toggle - user's explicit placement choice over a third tab).
 new `dateKeyOf` helper (blue, above the Trades Table). See
 `docs/design/56-pnl-history/README.md`'s new "Heat maps" subsection for
 the full color-scale and timezone-handling detail. `tsc -b`/`biome`/
-`npm run build` all clean, **not yet deployed** as of this edit.
+`npm run build` all clean, **deployed to acc1** (commits `50810e9ef` fix +
+`7b510577e` dist rebuild, verified via `git log`, a `grep -c` hit on both
+deployed bundles for "Heat Map", confirmed the `/pnl-history` 404-via-curl
+is Flask's own deliberate SPA-fallback behavior for unmatched React
+routes - not a regression - by reading the `app.py` 404 handler directly,
+and a clean `journalctl` aside from the same recurring `InvalidStateError`
+noise). VM stopped after, per explicit user request, confirmed safe
+(Sunday, market closed).
+
+**Same-day follow-up #9**: user asked to merge P&L History's trade-level
+rows by symbol - "I think all the brokers follow this." Confirmed via web
+search this is the real Scrip-wise convention (Zerodha's own Tax P&L
+equity sheet reports buy value/sell value/P&L per scrip, not per lot).
+The second tab (built in follow-up #7 as a flat per-lot list, labeled
+"Trade-wise") is now `scripRows` - a `useMemo` aggregation over
+`closedTrades` grouped by `symbol|exchange|product`, using each lot's
+`entry_action` to know which leg is the buy leg vs sell leg (a `BUY`-entry
+lot is a long: buy value = entry, sell value = exit; a `SELL`-entry lot is
+a short: reversed) - summed into total quantity, buy value, sell value,
+trade count, and net realized P&L per scrip. Tab renamed "Trade-wise" ->
+"Scrip-wise"; the table's old per-lot Entry/Exit price columns were
+dropped in favor of Buy Value/Sell Value/Trades, since a single price
+stops being meaningful once multiple lots merge into one row. `tsc -b`/
+`biome`/`npm run build` all clean, **not yet deployed** as of this edit.
 
 ### Next steps
 
 1. User review of this round's diff before committing it (standing rule) -
-   the seven rounds above are already committed and deployed; this is the
+   the eight rounds above are already committed and deployed; this is the
    next, still-pending piece.
-2. Deploy this round to acc1.
+2. Deploy this round to acc1 (VM currently stopped - start it first).
 3. Have the user retry the real CSV upload that originally failed under
    the multipart bug - still the first genuine end-to-end click test of
    the whole feature, still unconfirmed as of this edit.
 4. Once upload succeeds, click-test the Reports dropdown, the P&L History
-   page (Day-wise/Trade-wise toggle + its heat map), all five Segment
+   page (Day-wise/Scrip-wise toggle + its heat map), all five Segment
    values in both filter rows, Tradebook's historical mode + Trade ID
    column + its own heat map, the 7-day default, and the Fetch button,
    against the newly-imported real data.

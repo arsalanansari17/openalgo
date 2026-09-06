@@ -48,6 +48,17 @@ function defaultEndDate(): string {
   return new Date().toISOString().split('T')[0]
 }
 
+interface ScripRow {
+  symbol: string
+  exchange: string
+  product: string | null
+  quantity: number
+  buyValue: number
+  sellValue: number
+  realizedPnl: number
+  tradeCount: number
+}
+
 // Green/red-by-realized-P&L, matching Zerodha Console's own P&L heat map:
 // lighter shades for smaller swings, darker for larger ones, gray for a
 // day with closed trades that netted exactly zero.
@@ -72,7 +83,7 @@ export default function PnlHistory() {
   const [tradeCount, setTradeCount] = useState(0)
   const [daily, setDaily] = useState<PnlHistoryDailyRow[]>([])
   const [closedTrades, setClosedTrades] = useState<PnlHistoryClosedTrade[]>([])
-  const [view, setView] = useState<'day' | 'trade'>('day')
+  const [view, setView] = useState<'day' | 'scrip'>('day')
 
   const fetchHistory = async () => {
     if (!apiKey) {
@@ -117,6 +128,43 @@ export default function PnlHistory() {
       })),
     [daily, formatCurrency]
   )
+
+  // Scrip-wise view: merges every FIFO-matched lot for the same
+  // symbol+exchange+product into one row, matching the Scrip-wise
+  // aggregation every broker's own P&L report uses (Zerodha Console's Tax
+  // P&L equity sheet, for one, reports buy value/sell value/P&L per scrip
+  // rather than per lot). `entry_action` tells direction per lot - a BUY
+  // entry closed by a sell is a long (buy value = entry leg, sell value =
+  // exit leg); a SELL entry closed by a buy is a short (reversed).
+  const scripRows: ScripRow[] = useMemo(() => {
+    const rows = new Map<string, ScripRow>()
+    for (const trade of closedTrades) {
+      const key = `${trade.symbol}|${trade.exchange}|${trade.product ?? ''}`
+      const isLong = trade.entry_action === 'BUY'
+      const buyValue = trade.quantity * (isLong ? trade.entry_price : trade.exit_price)
+      const sellValue = trade.quantity * (isLong ? trade.exit_price : trade.entry_price)
+      const existing = rows.get(key)
+      if (existing) {
+        existing.quantity += trade.quantity
+        existing.buyValue += buyValue
+        existing.sellValue += sellValue
+        existing.realizedPnl += trade.realized_pnl
+        existing.tradeCount += 1
+      } else {
+        rows.set(key, {
+          symbol: trade.symbol,
+          exchange: trade.exchange,
+          product: trade.product,
+          quantity: trade.quantity,
+          buyValue,
+          sellValue,
+          realizedPnl: trade.realized_pnl,
+          tradeCount: 1,
+        })
+      }
+    }
+    return Array.from(rows.values()).sort((a, b) => a.symbol.localeCompare(b.symbol))
+  }, [closedTrades])
 
   return (
     <div className="space-y-6">
@@ -276,12 +324,12 @@ export default function PnlHistory() {
             </Card>
           )}
 
-          {/* Day-wise / Trade-wise toggle, matching Zerodha Console's own
+          {/* Day-wise / Scrip-wise toggle, matching Zerodha Console's own
               P&L report - only one breakdown is shown at a time. */}
           <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}>
             <TabsList>
               <TabsTrigger value="day">Day-wise</TabsTrigger>
-              <TabsTrigger value="trade">Trade-wise</TabsTrigger>
+              <TabsTrigger value="scrip">Scrip-wise</TabsTrigger>
             </TabsList>
           </Tabs>
 
@@ -328,11 +376,14 @@ export default function PnlHistory() {
           ) : (
             <Card>
               <CardHeader>
-                <CardTitle>Closed Trades</CardTitle>
-                <CardDescription>Each FIFO-matched entry/exit pair</CardDescription>
+                <CardTitle>Scrip-wise</CardTitle>
+                <CardDescription>
+                  Every closed lot merged by symbol, matching the Scrip-wise P&L report every broker
+                  uses
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                {closedTrades.length === 0 ? (
+                {scripRows.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">
                     No closed trades in this date range
                   </p>
@@ -345,31 +396,33 @@ export default function PnlHistory() {
                           <TableHead>Exchange</TableHead>
                           <TableHead>Product</TableHead>
                           <TableHead className="text-right">Qty</TableHead>
-                          <TableHead className="text-right">Entry</TableHead>
-                          <TableHead className="text-right">Exit</TableHead>
+                          <TableHead className="text-right">Buy Value</TableHead>
+                          <TableHead className="text-right">Sell Value</TableHead>
+                          <TableHead className="text-right">Trades</TableHead>
                           <TableHead className="text-right">Realized P&L</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {closedTrades.map((trade, idx) => (
-                          <TableRow key={`${trade.symbol}-${trade.exit_timestamp}-${idx}`}>
-                            <TableCell>{trade.symbol}</TableCell>
-                            <TableCell>{trade.exchange}</TableCell>
-                            <TableCell>{trade.product ?? '-'}</TableCell>
-                            <TableCell className="text-right">{trade.quantity}</TableCell>
+                        {scripRows.map((row) => (
+                          <TableRow key={`${row.symbol}-${row.exchange}-${row.product}`}>
+                            <TableCell>{row.symbol}</TableCell>
+                            <TableCell>{row.exchange}</TableCell>
+                            <TableCell>{row.product ?? '-'}</TableCell>
+                            <TableCell className="text-right">{row.quantity}</TableCell>
                             <TableCell className="text-right">
-                              {formatCurrency(trade.entry_price)}
+                              {formatCurrency(row.buyValue)}
                             </TableCell>
                             <TableCell className="text-right">
-                              {formatCurrency(trade.exit_price)}
+                              {formatCurrency(row.sellValue)}
                             </TableCell>
+                            <TableCell className="text-right">{row.tradeCount}</TableCell>
                             <TableCell
                               className={cn(
                                 'text-right font-medium',
-                                trade.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                                row.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'
                               )}
                             >
-                              {formatCurrency(trade.realized_pnl)}
+                              {formatCurrency(row.realizedPnl)}
                             </TableCell>
                           </TableRow>
                         ))}
