@@ -1237,8 +1237,10 @@ Verified live: `db/pnl.db` created with both tables, `pnl_apscheduler_jobs`
 has 1 registered job (the daily capture cron), served `TradeBook-*.js`
 bundle contains the new import strings.
 
-After seeing it live, user asked for two more things, both now built and
-locally verified (typecheck/lint/unit tests/build, not yet deployed):
+After seeing it live, user asked for two more things - both built, tested,
+and **deployed to acc1** the same day (commits `3f2ae556a` feature +
+`572388185` dist rebuild, restarted clean, `PnlHistory-*.js` confirmed
+present on disk and in the served bundle):
 
 1. A **Reports** dropdown in the main navbar (next to Tools), mirroring
    Zerodha Console's own Reports menu - Tradebook and P&L as its two
@@ -1252,18 +1254,31 @@ locally verified (typecheck/lint/unit tests/build, not yet deployed):
    /api/v1/pnl/history` out, summary cards + daily table + closed-trades
    table.
 
+**Same-day follow-up #2**: comparing the live page against Zerodha
+Console's own filter row, user asked for the missing **Segment** (Equity /
+Futures & Options) and **Symbol** filters. Symbol was already supported
+server-side, just never wired to the UI; Segment is new both ends - see
+`docs/design/56-pnl-history/README.md`'s "Segment and Symbol filters"
+subsection for the exchange-set reasoning (reuses
+`utils.constants.FNO_EXCHANGES` rather than a second hand-rolled mapping).
+Built and locally verified (a dedicated equity-vs-F&O split test:
+₹100 equity + ₹5000 F&O = ₹5100 combined, matching exactly), **not yet
+deployed** as of this edit - see updated Next steps.
+
 ### Next steps
 
-1. User review of this follow-up's diff before committing it (standing
-   rule).
-2. Click-test both the Upload button and the new Reports dropdown / P&L
-   History page in a live browser session - built, type-checked, linted,
-   and unit-tested, but never clicked end-to-end in a browser.
-3. Re-run `npm run build` immediately before this follow-up's deploy commit
-   (reverted from the working tree after confirming it builds, same reason
-   as the first deploy - a full Vite rebuild's ~124 unrelated chunk-hash
-   renames would bury the real diff).
-4. Deploy this follow-up to acc1 the same way as the first round.
+1. User review of the Segment/Symbol filter diff before committing it
+   (standing rule) - the Reports dropdown/P&L page round above is already
+   committed and deployed; this is the next, still-pending piece.
+2. Click-test the Upload button, the Reports dropdown, the P&L History
+   page, and now the Segment/Symbol filters in a live browser session -
+   all built, type-checked/linted/tested, but none clicked end-to-end in a
+   browser yet.
+3. Re-run `npm run build` immediately before this filter follow-up's
+   deploy commit (reverted from the working tree after confirming it
+   builds, same reason as both prior rounds).
+4. Deploy this filter follow-up to acc1 the same way as the prior two
+   rounds.
 5. Verify one real daily capture run end-to-end on acc1, then acc2, then
    acc3 (Kotak) - acc3 first exercises the Kotak CSV-import column mapping
    for real. Monday market open, by explicit user decision (Sunday deploy,

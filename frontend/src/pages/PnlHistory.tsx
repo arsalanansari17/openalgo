@@ -17,6 +17,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -42,6 +49,8 @@ export default function PnlHistory() {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = makeFormatCurrency(user?.broker)
 
+  const [segment, setSegment] = useState<'all' | 'equity' | 'fno'>('all')
+  const [symbol, setSymbol] = useState('')
   const [startDate, setStartDate] = useState(defaultStartDate())
   const [endDate, setEndDate] = useState(defaultEndDate())
   const [isLoading, setIsLoading] = useState(false)
@@ -63,7 +72,10 @@ export default function PnlHistory() {
 
     setIsLoading(true)
     try {
-      const response = await tradingApi.getPnlHistory(apiKey, startDate, endDate)
+      const response = await tradingApi.getPnlHistory(apiKey, startDate, endDate, {
+        symbol: symbol.trim().toUpperCase(),
+        segment: segment === 'all' ? undefined : segment,
+      })
       if (response.status === 'success' && response.data) {
         setTotalRealizedPnl(response.data.total_realized_pnl)
         setTradeCount(response.data.trade_count)
@@ -95,10 +107,33 @@ export default function PnlHistory() {
         </div>
       </div>
 
-      {/* Date Range */}
+      {/* Filters: Segment, Symbol, Date range - same order as Zerodha
+          Console's own Tradebook/P&L report filters. */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="pnl-segment">Segment</Label>
+              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
+                <SelectTrigger id="pnl-segment">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="equity">Equity</SelectItem>
+                  <SelectItem value="fno">Futures & Options</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="pnl-symbol">Symbol</Label>
+              <Input
+                id="pnl-symbol"
+                placeholder="e.g. INFY"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+              />
+            </div>
             <div className="flex-1 space-y-1">
               <Label htmlFor="pnl-start-date">Start date</Label>
               <Input

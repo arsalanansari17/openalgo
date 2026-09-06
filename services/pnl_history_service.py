@@ -15,15 +15,33 @@ from datetime import datetime
 
 from database.auth_db import get_auth_token_broker
 from database.pnl_db import PnlTrade, db_session, make_dedup_key, parse_trade_timestamp
+from utils.constants import EXCHANGE_BSE, EXCHANGE_NSE, FNO_EXCHANGES
 from utils.logging import get_logger
 from utils.pnl_fifo import compute_realized_pnl, summarize_by_day
 
 logger = get_logger(__name__)
 
+# "Equity" here is the cash segment (NSE/BSE); "fno" reuses OpenAlgo's own
+# canonical FNO_EXCHANGES (utils/constants.py) rather than redefining a
+# second exchange-segment mapping that could drift from it - covers
+# NFO/BFO/MCX/CDS/BCD/NCDEX/NCO/crypto, the same set every other service
+# already treats as "derivatives" for margin/product-type purposes.
+_SEGMENT_EXCHANGES = {
+    "equity": {EXCHANGE_NSE, EXCHANGE_BSE},
+    "fno": set(FNO_EXCHANGES),
+}
 
-def get_pnl_history(api_key: str, start_date: str, end_date: str, symbol: str | None = None):
+
+def get_pnl_history(
+    api_key: str,
+    start_date: str,
+    end_date: str,
+    symbol: str | None = None,
+    segment: str | None = None,
+):
     """Realized P&L for one account over [start_date, end_date] (inclusive,
-    "YYYY-MM-DD").
+    "YYYY-MM-DD"), optionally narrowed to one symbol and/or one segment
+    ("equity" or "fno" - see _SEGMENT_EXCHANGES above).
 
     Returns (success, response_dict, status_code) - same tuple shape as
     every other service in services/ (docs/design/27-service-layer).
@@ -44,12 +62,26 @@ def get_pnl_history(api_key: str, start_date: str, end_date: str, symbol: str | 
             400,
         )
 
+    if segment and segment not in _SEGMENT_EXCHANGES:
+        return (
+            False,
+            {"status": "error", "message": "segment must be 'equity' or 'fno'"},
+            400,
+        )
+
     try:
         query = db_session.query(PnlTrade).filter(
             PnlTrade.trade_timestamp >= start, PnlTrade.trade_timestamp <= end
         )
         if symbol:
             query = query.filter(PnlTrade.symbol == symbol)
+        if segment:
+            # Filtering by exchange before FIFO matching is safe: exchange
+            # is already part of the FIFO grouping key
+            # (utils/pnl_fifo.py groups by symbol+exchange+product), so a
+            # segment can never split a single FIFO queue across the filter
+            # boundary.
+            query = query.filter(PnlTrade.exchange.in_(_SEGMENT_EXCHANGES[segment]))
         # Chronological order matters for FIFO correctness (utils/pnl_fifo.py
         # sorts again internally, but ties on an identical timestamp then
         # fall back to this insertion/id order rather than an arbitrary one).

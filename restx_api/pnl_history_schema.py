@@ -16,6 +16,12 @@ class PnlHistorySchema(Schema):
     start_date = fields.Str(required=True, validate=validate.Length(equal=10))
     end_date = fields.Str(required=True, validate=validate.Length(equal=10))
     symbol = fields.Str(required=False, load_default=None)
+    # "equity" (NSE/BSE cash) or "fno" (derivatives - reuses OpenAlgo's own
+    # FNO_EXCHANGES, see services/pnl_history_service.py). Omitted/empty
+    # means no segment filter.
+    segment = fields.Str(
+        required=False, load_default=None, validate=validate.OneOf(["equity", "fno"])
+    )
 
 
 class PnlImportSchema(Schema):

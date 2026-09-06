@@ -126,6 +126,7 @@ class PnlHistory(Resource):
                 start_date=params["start_date"],
                 end_date=params["end_date"],
                 symbol=params.get("symbol"),
+                segment=params.get("segment"),
             )
             return make_response(jsonify(response_data), status_code)
         except ValidationError as err:

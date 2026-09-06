@@ -253,10 +253,20 @@ export const tradingApi = {
   getPnlHistory: async (
     apiKey: string,
     startDate: string,
-    endDate: string
+    endDate: string,
+    options?: { symbol?: string; segment?: 'equity' | 'fno' }
   ): Promise<ApiResponse<PnlHistoryData>> => {
     const response = await apiClient.get<ApiResponse<PnlHistoryData>>('/pnl/history', {
-      params: { apikey: apiKey, start_date: startDate, end_date: endDate },
+      params: {
+        apikey: apiKey,
+        start_date: startDate,
+        end_date: endDate,
+        // undefined keys are dropped by axios's param serializer, not sent
+        // as empty strings - important here since the schema's segment
+        // field validates against a fixed OneOf and would reject "".
+        symbol: options?.symbol || undefined,
+        segment: options?.segment || undefined,
+      },
     })
     return response.data
   },

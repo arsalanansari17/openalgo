@@ -168,6 +168,28 @@ Console's own Reports menu - Tradebook and P&L as its two options for now
   interfaces mirroring `services/pnl_history_service.py::get_pnl_history`'s
   response shape exactly.
 
+### Segment and Symbol filters
+
+Added after seeing the page live, comparing against Zerodha Console's own
+Tradebook/P&L filter row (Segment, Symbol, Date range). Symbol was already
+supported server-side (`get_pnl_history`'s `symbol` param existed from the
+first version) but never wired to the UI; Segment ("Equity" vs "Futures &
+Options") is new on both ends.
+
+`services/pnl_history_service.py::get_pnl_history` gained a `segment`
+param, filtering `PnlTrade.exchange` before FIFO matching - safe because
+exchange is already part of the FIFO grouping key
+(`utils/pnl_fifo.py` groups by symbol+exchange+product), so a segment
+filter can never split one FIFO queue across the filter boundary. The
+exchange sets aren't reinvented: "equity" is `{NSE, BSE}`, "fno" reuses
+`utils.constants.FNO_EXCHANGES` directly (NFO/BFO/MCX/CDS/BCD/NCDEX/NCO/
+crypto - the same set every other OpenAlgo service already treats as
+"derivatives"), so this can never drift from the canonical definition.
+`restx_api/pnl_history_schema.py`'s `segment` field validates against
+`OneOf(["equity", "fno"])` - the frontend sends `undefined` (dropped by
+axios, not an empty string) rather than a literal "all" value for the
+unfiltered case, since the schema has no third valid value for it.
+
 ## Import UI
 
 An "Upload" button sits next to the existing "Export" button on the Trade
