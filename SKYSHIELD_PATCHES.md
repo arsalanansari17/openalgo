@@ -1343,29 +1343,45 @@ Symbol/date edit) - now data only auto-loads once on mount (effect
 depends on `[apiKey]` instead, flagged with a `biome-ignore` comment
 rather than silently disabling the rule project-wide), and "Fetch" is the
 explicit trigger afterward. The existing header "Refresh" button is
-unchanged. `tsc -b`/`biome`/`npm run build` all clean, **not yet
-deployed** as of this edit.
+unchanged. `tsc -b`/`biome`/`npm run build` all clean, **deployed to
+acc1** (commits `d5bbf157c` fix + `6045c9add` dist rebuild, verified via
+`git log`, a `grep -c` hit on the deployed `TradeBook-*.js` bundle, and a
+clean `journalctl` with no new errors).
+
+**Same-day follow-up #7**: `PnlHistory.tsx` was showing the Daily
+Breakdown table and the Closed Trades table stacked at once. User asked
+for a toggle so only one shows at a time - matching Zerodha Console's own
+P&L report (Day-wise vs Scrip-wise, never both). Implemented with the
+existing `Tabs`/`TabsList`/`TabsTrigger` primitives
+(`frontend/src/components/ui/tabs.tsx`, already in the design system,
+unused until now) - a `view: 'day' | 'trade'` state var picks which Card
+renders, defaulting to `'day'`. Purely a client-side render switch: both
+`daily` and `closedTrades` are already in state from the last Fetch, so
+no new request fires on tab switch. `tsc -b`/`biome`/`npm run build` all
+clean, **not yet deployed** as of this edit.
 
 ### Next steps
 
 1. User review of this round's diff before committing it (standing rule) -
-   the five rounds above are already committed and deployed; this is the
+   the six rounds above are already committed and deployed; this is the
    next, still-pending piece.
-2. Deploy this round to acc1, then have the user retry the real CSV
-   upload that originally failed under the multipart bug - still the
-   first genuine end-to-end click test of the whole feature.
-3. Once upload succeeds, click-test the Reports dropdown, the P&L History
-   page, all five Segment values in both filter rows, Tradebook's
-   historical mode + Trade ID column, the new 7-day default, and the
-   Fetch button, against the newly-imported real data.
-4. Re-run `npm run build` immediately before this round's deploy commit
+2. Deploy this round to acc1.
+3. Have the user retry the real CSV upload that originally failed under
+   the multipart bug - still the first genuine end-to-end click test of
+   the whole feature, still unconfirmed as of this edit.
+4. Once upload succeeds, click-test the Reports dropdown, the P&L History
+   page (including the new Day-wise/Trade-wise toggle), all five Segment
+   values in both filter rows, Tradebook's historical mode + Trade ID
+   column, the 7-day default, and the Fetch button, against the
+   newly-imported real data.
+5. Re-run `npm run build` immediately before this round's deploy commit
    (reverted from the working tree after confirming it builds, same reason
    as every prior round).
-5. Verify one real daily capture run end-to-end on acc1, then acc2, then
+6. Verify one real daily capture run end-to-end on acc1, then acc2, then
    acc3 (Kotak) - acc3 first exercises the Kotak CSV-import column mapping
    for real, and is the only account with a real commodity/currency
    segment likely to appear given Kotak's broader instrument access.
    Monday market open, by explicit user decision (Sunday deploy,
    fix-if-needed live rather than delaying further).
-6. Build the AlgoMirror-side thin aggregator once at least one account's
+7. Build the AlgoMirror-side thin aggregator once at least one account's
    `/api/v1/pnl/history` is confirmed live.

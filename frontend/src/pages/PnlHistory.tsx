@@ -32,6 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
@@ -60,6 +61,7 @@ export default function PnlHistory() {
   const [tradeCount, setTradeCount] = useState(0)
   const [daily, setDaily] = useState<PnlHistoryDailyRow[]>([])
   const [closedTrades, setClosedTrades] = useState<PnlHistoryClosedTrade[]>([])
+  const [view, setView] = useState<'day' | 'trade'>('day')
 
   const fetchHistory = async () => {
     if (!apiKey) {
@@ -203,94 +205,107 @@ export default function PnlHistory() {
             </Card>
           </div>
 
-          {/* Daily Breakdown */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Daily Breakdown</CardTitle>
-              <CardDescription>Realized P&L by the day it was closed out</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {daily.length === 0 ? (
-                <p className="text-center text-muted-foreground py-8">
-                  No closed trades in this date range
-                </p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead className="text-right">Trades</TableHead>
-                      <TableHead className="text-right">Realized P&L</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {daily.map((row) => (
-                      <TableRow key={row.date}>
-                        <TableCell>{row.date}</TableCell>
-                        <TableCell className="text-right">{row.trade_count}</TableCell>
-                        <TableCell
-                          className={cn(
-                            'text-right font-medium',
-                            row.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'
-                          )}
-                        >
-                          {formatCurrency(row.realized_pnl)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
+          {/* Day-wise / Trade-wise toggle, matching Zerodha Console's own
+              P&L report - only one breakdown is shown at a time. */}
+          <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}>
+            <TabsList>
+              <TabsTrigger value="day">Day-wise</TabsTrigger>
+              <TabsTrigger value="trade">Trade-wise</TabsTrigger>
+            </TabsList>
+          </Tabs>
 
-          {/* Closed Trades */}
-          {closedTrades.length > 0 && (
+          {view === 'day' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Daily Breakdown</CardTitle>
+                <CardDescription>Realized P&L by the day it was closed out</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {daily.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">
+                    No closed trades in this date range
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Trades</TableHead>
+                        <TableHead className="text-right">Realized P&L</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {daily.map((row) => (
+                        <TableRow key={row.date}>
+                          <TableCell>{row.date}</TableCell>
+                          <TableCell className="text-right">{row.trade_count}</TableCell>
+                          <TableCell
+                            className={cn(
+                              'text-right font-medium',
+                              row.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                            )}
+                          >
+                            {formatCurrency(row.realized_pnl)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
             <Card>
               <CardHeader>
                 <CardTitle>Closed Trades</CardTitle>
                 <CardDescription>Each FIFO-matched entry/exit pair</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Symbol</TableHead>
-                        <TableHead>Exchange</TableHead>
-                        <TableHead>Product</TableHead>
-                        <TableHead className="text-right">Qty</TableHead>
-                        <TableHead className="text-right">Entry</TableHead>
-                        <TableHead className="text-right">Exit</TableHead>
-                        <TableHead className="text-right">Realized P&L</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {closedTrades.map((trade, idx) => (
-                        <TableRow key={`${trade.symbol}-${trade.exit_timestamp}-${idx}`}>
-                          <TableCell>{trade.symbol}</TableCell>
-                          <TableCell>{trade.exchange}</TableCell>
-                          <TableCell>{trade.product ?? '-'}</TableCell>
-                          <TableCell className="text-right">{trade.quantity}</TableCell>
-                          <TableCell className="text-right">
-                            {formatCurrency(trade.entry_price)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {formatCurrency(trade.exit_price)}
-                          </TableCell>
-                          <TableCell
-                            className={cn(
-                              'text-right font-medium',
-                              trade.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'
-                            )}
-                          >
-                            {formatCurrency(trade.realized_pnl)}
-                          </TableCell>
+                {closedTrades.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">
+                    No closed trades in this date range
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Symbol</TableHead>
+                          <TableHead>Exchange</TableHead>
+                          <TableHead>Product</TableHead>
+                          <TableHead className="text-right">Qty</TableHead>
+                          <TableHead className="text-right">Entry</TableHead>
+                          <TableHead className="text-right">Exit</TableHead>
+                          <TableHead className="text-right">Realized P&L</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                      </TableHeader>
+                      <TableBody>
+                        {closedTrades.map((trade, idx) => (
+                          <TableRow key={`${trade.symbol}-${trade.exit_timestamp}-${idx}`}>
+                            <TableCell>{trade.symbol}</TableCell>
+                            <TableCell>{trade.exchange}</TableCell>
+                            <TableCell>{trade.product ?? '-'}</TableCell>
+                            <TableCell className="text-right">{trade.quantity}</TableCell>
+                            <TableCell className="text-right">
+                              {formatCurrency(trade.entry_price)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {formatCurrency(trade.exit_price)}
+                            </TableCell>
+                            <TableCell
+                              className={cn(
+                                'text-right font-medium',
+                                trade.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                              )}
+                            >
+                              {formatCurrency(trade.realized_pnl)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}

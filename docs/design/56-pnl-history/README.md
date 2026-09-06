@@ -253,9 +253,11 @@ Console's own Reports menu - Tradebook and P&L as its two options for now
   mobile entry point).
 - `frontend/src/pages/PnlHistory.tsx` (new): date range in, `GET
   /api/v1/pnl/history` out - summary cards (total realized P&L, closed
-  trade count), a daily breakdown table, and a per-lot closed-trades table.
-  Nothing precomputed or cached client-side; every "Fetch" click re-runs
-  the FIFO match server-side. Registered at `/pnl-history` in `App.tsx`.
+  trade count), plus a Day-wise/Trade-wise `Tabs` toggle (see below) that
+  shows either the daily breakdown table or the per-lot closed-trades
+  table, never both at once. Nothing precomputed or cached client-side;
+  every "Fetch" click re-runs the FIFO match server-side. Registered at
+  `/pnl-history` in `App.tsx`.
 - `frontend/src/api/trading.ts`: `getPnlHistory`, plus TypeScript
   interfaces mirroring `services/pnl_history_service.py::get_pnl_history`'s
   response shape exactly.
@@ -315,6 +317,21 @@ same round - it holds the raw fill ledger only, never a computed P&L
 value, so "pnl.db" was a misleading name from the start. Safe to rename
 outright (no migration needed) since every VM's copy was still empty at
 the time.
+
+### Day-wise / Trade-wise toggle
+
+Added 2026-09-06 after the 7-day-default/Fetch-button round on Trade Book:
+`PnlHistory.tsx` previously rendered both the Daily Breakdown table and the
+Closed Trades table stacked on the same page at once. User asked for only
+one to show at a time, picked by a toggle - matching Zerodha Console's own
+P&L report, which shows either its "Day-wise" or "Scrip-wise" view, never
+both. Implemented with the existing `Tabs`/`TabsList`/`TabsTrigger`
+primitives (`frontend/src/components/ui/tabs.tsx`, already in the design
+system, unused until now) rather than adding a new toggle component - a
+`view: 'day' | 'trade'` state var controls which Card renders, defaulting
+to `'day'`. No new fetch is triggered by switching tabs; both `daily` and
+`closedTrades` are already in state from the last Fetch, so the toggle is
+purely a client-side render switch.
 
 ## Import UI
 
