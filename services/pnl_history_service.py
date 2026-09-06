@@ -32,6 +32,46 @@ _SEGMENT_EXCHANGES = {
 }
 
 
+def _parse_range_and_build_query(start_date, end_date, symbol=None, segment=None):
+    """Shared by get_pnl_history and get_pnl_trades: parse the date range,
+    validate segment, and build the base PnlTrade query. Returns
+    (error_response_or_None, query_or_None, start, end).
+    """
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+    except ValueError:
+        return (
+            (False, {"status": "error", "message": "start_date/end_date must be YYYY-MM-DD"}, 400),
+            None,
+            None,
+            None,
+        )
+
+    if segment and segment not in _SEGMENT_EXCHANGES:
+        return (
+            (False, {"status": "error", "message": "segment must be 'equity' or 'fno'"}, 400),
+            None,
+            None,
+            None,
+        )
+
+    query = db_session.query(PnlTrade).filter(
+        PnlTrade.trade_timestamp >= start, PnlTrade.trade_timestamp <= end
+    )
+    if symbol:
+        query = query.filter(PnlTrade.symbol == symbol)
+    if segment:
+        # Exchange is a legitimate pre-filter for both consumers: for
+        # get_pnl_history's FIFO matching it's safe because exchange is
+        # already part of the FIFO grouping key (utils/pnl_fifo.py groups by
+        # symbol+exchange+product), and for get_pnl_trades it's just a plain
+        # row filter with no matching involved at all.
+        query = query.filter(PnlTrade.exchange.in_(_SEGMENT_EXCHANGES[segment]))
+
+    return None, query, start, end
+
+
 def get_pnl_history(
     api_key: str,
     start_date: str,
@@ -50,38 +90,13 @@ def get_pnl_history(
     if not auth_token:
         return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
 
-    try:
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d").replace(
-            hour=23, minute=59, second=59
-        )
-    except ValueError:
-        return (
-            False,
-            {"status": "error", "message": "start_date/end_date must be YYYY-MM-DD"},
-            400,
-        )
-
-    if segment and segment not in _SEGMENT_EXCHANGES:
-        return (
-            False,
-            {"status": "error", "message": "segment must be 'equity' or 'fno'"},
-            400,
-        )
+    error, query, start, end = _parse_range_and_build_query(
+        start_date, end_date, symbol=symbol, segment=segment
+    )
+    if error:
+        return error
 
     try:
-        query = db_session.query(PnlTrade).filter(
-            PnlTrade.trade_timestamp >= start, PnlTrade.trade_timestamp <= end
-        )
-        if symbol:
-            query = query.filter(PnlTrade.symbol == symbol)
-        if segment:
-            # Filtering by exchange before FIFO matching is safe: exchange
-            # is already part of the FIFO grouping key
-            # (utils/pnl_fifo.py groups by symbol+exchange+product), so a
-            # segment can never split a single FIFO queue across the filter
-            # boundary.
-            query = query.filter(PnlTrade.exchange.in_(_SEGMENT_EXCHANGES[segment]))
         # Chronological order matters for FIFO correctness (utils/pnl_fifo.py
         # sorts again internally, but ties on an identical timestamp then
         # fall back to this insertion/id order rather than an arbitrary one).
@@ -152,6 +167,60 @@ def get_pnl_history(
         )
     except Exception as e:
         logger.exception(f"Error computing PnL history: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
+    finally:
+        db_session.remove()
+
+
+def get_pnl_trades(
+    api_key: str,
+    start_date: str,
+    end_date: str,
+    symbol: str | None = None,
+    segment: str | None = None,
+):
+    """Raw fills for one account over [start_date, end_date] - no FIFO
+    matching, just the ledger rows as-is. Backs the historical Tradebook
+    view (frontend/src/pages/TradeBook.tsx switches to this endpoint once
+    the selected date range isn't "today"; the live view keeps using the
+    broker's own tradebook API via services/tradebook_service.py, since
+    today's trades aren't in the ledger yet - the daily capture job runs
+    at 16:00 IST, after close).
+
+    Returns each row in the same shape frontend/src/types/trading.ts's
+    Trade interface expects, so the existing Trade Book table needs no
+    per-source branching to render either kind of data.
+    """
+    auth_token, broker = get_auth_token_broker(api_key)
+    if not auth_token:
+        return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+
+    error, query, start, end = _parse_range_and_build_query(
+        start_date, end_date, symbol=symbol, segment=segment
+    )
+    if error:
+        return error
+
+    try:
+        rows = query.order_by(PnlTrade.trade_timestamp.desc(), PnlTrade.id.desc()).all()
+        data = [
+            {
+                "symbol": row.symbol,
+                "exchange": row.exchange,
+                "product": row.product or "",
+                "action": row.action,
+                "quantity": row.quantity,
+                "average_price": row.average_price,
+                "trade_value": row.trade_value or 0,
+                "orderid": row.orderid or "",
+                "tradeid": row.tradeid or "",
+                "timestamp": row.trade_timestamp.isoformat(sep=" "),
+            }
+            for row in rows
+        ]
+        return True, {"status": "success", "data": data}, 200
+    except Exception as e:
+        logger.exception(f"Error fetching PnL trades: {e}")
         return False, {"status": "error", "message": str(e)}, 500
     finally:
         db_session.remove()

@@ -35,6 +35,12 @@ export interface Trade {
   product: string
   orderid: string
   timestamp: string
+  // Per-fill broker trade ID. Populated by both the live /tradebook
+  // endpoint (broker/*/mapping/order_data.py's transform_tradebook_data,
+  // fixed 2026-09-06 to emit this) and the fork-only GET /api/v1/pnl/trades
+  // (SKYSHIELD_PATCHES.md) - optional only because older/unmapped brokers
+  // may not populate it.
+  tradeid?: string
 }
 
 export interface Holding {

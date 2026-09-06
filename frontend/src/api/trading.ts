@@ -272,6 +272,24 @@ export const tradingApi = {
   },
 
   /**
+   * Raw fills for a date range from the consolidated multi-day P&L ledger
+   * (fork-only - see openalgo's SKYSHIELD_PATCHES.md) - no FIFO matching,
+   * just the ledger rows. Backs TradeBook.tsx's historical view; the live
+   * "today" view keeps using getTrades() above, since today's trades
+   * aren't in the ledger yet (the daily capture job runs after close).
+   */
+  getPnlTrades: async (
+    apiKey: string,
+    startDate: string,
+    endDate: string
+  ): Promise<ApiResponse<Trade[]>> => {
+    const response = await apiClient.get<ApiResponse<Trade[]>>('/pnl/trades', {
+      params: { apikey: apiKey, start_date: startDate, end_date: endDate },
+    })
+    return response.data
+  },
+
+  /**
    * Get holdings
    */
   getHoldings: async (

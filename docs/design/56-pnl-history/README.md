@@ -117,6 +117,40 @@ calls `get_tradebook(auth_token=..., broker=...)` directly - **not** the
 Analyzer mode is toggled on, which must never happen for a real-money
 ledger.
 
+## Tradebook becomes historical too
+
+User's original intent for the Upload feature was for Tradebook itself to
+be able to show what got uploaded - not just a separate P&L report.
+Comparing against the Zerodha screenshot again, `frontend/src/pages/
+TradeBook.tsx` now has the same Segment/Symbol/Date-range filter row as
+P&L History.
+
+The real constraint: today's trades aren't in `pnl_trades` until the
+16:00 IST daily capture job runs, so Tradebook can't switch to the ledger
+unconditionally without losing live intraday visibility. Resolution:
+`isHistorical = startDate !== today || endDate !== today`. At the default
+(today/today), `fetchTrades` keeps calling the existing live
+`services/tradebook_service.py`-backed `/tradebook` endpoint, unchanged.
+Moving either date away from today switches to the new
+`GET /api/v1/pnl/trades` (`services/pnl_history_service.py::get_pnl_trades`)
+- raw ledger rows, no FIFO matching at all (unlike `/pnl/history`, which is
+FIFO-matched realized P&L - these are deliberately different shapes for
+deliberately different questions: "what did I trade" vs. "what did I
+realize").
+
+Segment and Symbol are applied as **client-side** filters uniformly across
+both data sources in `sortedAndFilteredTrades` (a `EQUITY_EXCHANGES`/
+`FNO_EXCHANGES` set mirrored by hand from `_SEGMENT_EXCHANGES` on the
+backend, since the frontend has no import path into that Python module -
+keep them in sync if the backend set ever changes) - simpler than
+conditionally skipping server-side filtering for the live path, which
+doesn't support it at all (the broker's tradebook API takes no segment
+param).
+
+A **Trade ID** column was added to the table (and CSV export) alongside
+the existing Order ID - it was already correctly emitted end-to-end for
+the live path since the 2026-09-06 tradebook fix, just never rendered.
+
 ## CSV import
 
 `POST /api/v1/pnl/import` accepts a `multipart/form-data` upload

@@ -10,6 +10,8 @@ restx_api/pnl_symbols.py or account_schema.py changes.
 
     GET  /api/v1/pnl/history  - realized P&L for a date range (AlgoMirror's
                                  aggregator calls this once per account)
+    GET  /api/v1/pnl/trades   - raw fills for a date range, no FIFO -
+                                 backs the historical Trade Book view
     POST /api/v1/pnl/import   - backfill the ledger from an exported
                                  tradebook CSV, for history predating the
                                  daily capture job
@@ -24,7 +26,7 @@ from flask_restx import Namespace, Resource
 from marshmallow import ValidationError
 
 from limiter import limiter
-from services.pnl_history_service import get_pnl_history, import_trades_csv
+from services.pnl_history_service import get_pnl_history, get_pnl_trades, import_trades_csv
 from utils.logging import get_logger
 
 from .pnl_history_schema import PnlHistorySchema, PnlImportSchema
@@ -133,6 +135,30 @@ class PnlHistory(Resource):
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
             logger.exception(f"Unexpected error in pnl/history endpoint: {e}")
+            return make_response(
+                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
+            )
+
+
+@api.route("/trades", strict_slashes=False)
+class PnlTrades(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    def get(self):
+        """Raw fills for one account over a date range - no FIFO matching."""
+        try:
+            params = pnl_history_schema.load(request.args.to_dict())
+            success, response_data, status_code = get_pnl_trades(
+                api_key=params["apikey"],
+                start_date=params["start_date"],
+                end_date=params["end_date"],
+                symbol=params.get("symbol"),
+                segment=params.get("segment"),
+            )
+            return make_response(jsonify(response_data), status_code)
+        except ValidationError as err:
+            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
+        except Exception as e:
+            logger.exception(f"Unexpected error in pnl/trades endpoint: {e}")
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )

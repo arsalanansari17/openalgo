@@ -26,6 +26,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -52,6 +59,19 @@ type SortKey = 'timestamp' | 'symbol' | 'action'
 interface SortConfig {
   key: SortKey
   direction: 'asc' | 'desc'
+}
+
+// Fork-only historical view (SKYSHIELD_PATCHES.md): Segment maps to
+// exchange codes, mirroring services/pnl_history_service.py's
+// _SEGMENT_EXCHANGES exactly - equity is the cash segment, fno reuses the
+// same derivatives set as utils.constants.FNO_EXCHANGES on the backend.
+// Kept in sync by hand since the frontend has no import path into that
+// Python module; if that set changes, update this one too.
+const EQUITY_EXCHANGES = new Set(['NSE', 'BSE'])
+const FNO_EXCHANGES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX', 'NCO', 'CRYPTO'])
+
+function todayStr(): string {
+  return new Date().toISOString().split('T')[0]
 }
 
 /**
@@ -122,6 +142,17 @@ export default function TradeBook() {
   const [importFile, setImportFile] = useState<File | null>(null)
   const [isImporting, setIsImporting] = useState(false)
 
+  // Historical view (fork-only - SKYSHIELD_PATCHES.md). Default date range
+  // is today on both ends, which keeps fetchTrades on the existing live
+  // broker call below - changing either date switches to the ledger-backed
+  // GET /api/v1/pnl/trades, since today's trades aren't captured into the
+  // ledger until the 16:00 IST daily job runs.
+  const [segment, setSegment] = useState<'all' | 'equity' | 'fno'>('all')
+  const [symbolFilter, setSymbolFilter] = useState('')
+  const [startDate, setStartDate] = useState(todayStr())
+  const [endDate, setEndDate] = useState(todayStr())
+  const isHistorical = startDate !== todayStr() || endDate !== todayStr()
+
   // Sort state - Default: most recent first
   const [sortConfig, setSortConfig] = useState<SortConfig>({
     key: 'timestamp',
@@ -135,6 +166,13 @@ export default function TradeBook() {
       if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
+      if (segment === 'equity' && !EQUITY_EXCHANGES.has(trade.exchange)) return false
+      if (segment === 'fno' && !FNO_EXCHANGES.has(trade.exchange)) return false
+      if (
+        symbolFilter &&
+        !trade.symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase())
+      )
+        return false
       return true
     })
 
@@ -154,7 +192,7 @@ export default function TradeBook() {
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
       return 0
     })
-  }, [trades, filters, sortConfig])
+  }, [trades, filters, segment, symbolFilter, sortConfig])
 
   const requestSort = (key: SortKey) => {
     setSortConfig((prev) => ({
@@ -191,7 +229,13 @@ export default function TradeBook() {
       if (showRefresh) setIsRefreshing(true)
 
       try {
-        const response = await tradingApi.getTrades(apiKey)
+        // A date range other than "today" switches to the ledger-backed
+        // historical endpoint - see the isHistorical comment above. Segment/
+        // Symbol stay client-side filters applied uniformly to either
+        // source in sortedAndFilteredTrades, rather than branching here too.
+        const response = isHistorical
+          ? await tradingApi.getPnlTrades(apiKey, startDate, endDate)
+          : await tradingApi.getTrades(apiKey)
         if (response.status === 'success' && response.data) {
           setTrades(response.data)
           setError(null)
@@ -205,7 +249,7 @@ export default function TradeBook() {
         setIsRefreshing(false)
       }
     },
-    [apiKey]
+    [apiKey, isHistorical, startDate, endDate]
   )
 
   useEffect(() => {
@@ -241,6 +285,7 @@ export default function TradeBook() {
         'Price',
         'Trade Value',
         'Order ID',
+        'Trade ID',
         'Time',
       ]
       const rows = sortedAndFilteredTrades.map((t) => [
@@ -252,6 +297,7 @@ export default function TradeBook() {
         sanitizeCSV(t.average_price),
         sanitizeCSV(t.trade_value),
         sanitizeCSV(t.orderid),
+        sanitizeCSV(t.tradeid || ''),
         sanitizeCSV(t.timestamp),
       ])
 
@@ -341,7 +387,11 @@ export default function TradeBook() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Trade Book</h1>
-          <p className="text-muted-foreground">View your executed trades</p>
+          <p className="text-muted-foreground">
+            {isHistorical
+              ? 'Historical trades from the consolidated P&L ledger'
+              : "View today's executed trades"}
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Settings Button */}
@@ -491,6 +541,61 @@ export default function TradeBook() {
         </div>
       </div>
 
+      {/* Segment / Symbol / Date range (fork-only - SKYSHIELD_PATCHES.md).
+          Same layout as PnlHistory.tsx's filter row, and the same reference
+          this whole historical view was modeled on (Zerodha Console's own
+          Tradebook report). Leaving the date range at today keeps this page
+          on the existing live broker view untouched - see isHistorical. */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-segment">Segment</Label>
+              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
+                <SelectTrigger id="tb-segment">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="equity">Equity</SelectItem>
+                  <SelectItem value="fno">Futures & Options</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-symbol">Symbol</Label>
+              <Input
+                id="tb-symbol"
+                placeholder="e.g. INFY"
+                value={symbolFilter}
+                onChange={(e) => setSymbolFilter(e.target.value)}
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-start-date">Start date</Label>
+              <Input
+                id="tb-start-date"
+                type="date"
+                value={startDate}
+                max={endDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-end-date">End date</Label>
+              <Input
+                id="tb-end-date"
+                type="date"
+                value={endDate}
+                min={startDate}
+                max={todayStr()}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Active Filters Bar */}
       {hasActiveFilters && (
         <div className="flex flex-wrap items-center gap-3">
@@ -581,6 +686,8 @@ export default function TradeBook() {
                     Clear Filters
                   </Button>
                 </div>
+              ) : isHistorical ? (
+                'No trades in this date range'
               ) : (
                 'No trades today'
               )}
@@ -624,6 +731,7 @@ export default function TradeBook() {
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-right">Trade Value</TableHead>
                     <TableHead>Order ID</TableHead>
+                    <TableHead>Trade ID</TableHead>
                     <TableHead
                       onClick={() => requestSort('timestamp')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
@@ -673,8 +781,9 @@ export default function TradeBook() {
                         {formatCurrency(trade.trade_value)}
                       </TableCell>
                       <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
+                      <TableCell className="font-mono text-xs">{trade.tradeid || '-'}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {formatTime(trade.timestamp)}
+                        {isHistorical ? trade.timestamp : formatTime(trade.timestamp)}
                       </TableCell>
                     </TableRow>
                   ))}

@@ -1261,24 +1261,40 @@ server-side, just never wired to the UI; Segment is new both ends - see
 `docs/design/56-pnl-history/README.md`'s "Segment and Symbol filters"
 subsection for the exchange-set reasoning (reuses
 `utils.constants.FNO_EXCHANGES` rather than a second hand-rolled mapping).
-Built and locally verified (a dedicated equity-vs-F&O split test:
-₹100 equity + ₹5000 F&O = ₹5100 combined, matching exactly), **not yet
-deployed** as of this edit - see updated Next steps.
+Built, locally verified (a dedicated equity-vs-F&O split test: ₹100
+equity + ₹5000 F&O = ₹5100 combined, matching exactly), and **deployed to
+acc1** (commits `7353569db` feature + `7998bfd7c` dist rebuild, restarted
+clean, served bundle confirmed containing the new filter strings).
+
+**Same-day follow-up #3**: user clarified the original intent - the Upload
+feature was meant to make Tradebook itself show historical data, not just
+feed a separate P&L report. Tradebook now has the same Segment/Symbol/
+Date-range row as P&L History; moving the date range off "today" switches
+it from the existing live broker call to a new `GET /api/v1/pnl/trades`
+(raw ledger rows, no FIFO - see `docs/design/56-pnl-history/README.md`'s
+"Tradebook becomes historical too" subsection for the live-vs-historical
+data-source switch and why it's needed - today's trades aren't in the
+ledger until the 16:00 IST capture job runs). Also added the previously-
+missing **Trade ID** column (already correctly emitted end-to-end since
+the tradebook fix, just never rendered). Built and locally verified
+(`get_pnl_trades` tested directly - correct rows, correct segment split,
+correct descending order; `tsc -b`/`biome`/`npm run build` all clean),
+**not yet deployed** as of this edit.
 
 ### Next steps
 
-1. User review of the Segment/Symbol filter diff before committing it
-   (standing rule) - the Reports dropdown/P&L page round above is already
-   committed and deployed; this is the next, still-pending piece.
+1. User review of the Tradebook-historical-view diff before committing it
+   (standing rule) - the two rounds above are already committed and
+   deployed; this is the next, still-pending piece.
 2. Click-test the Upload button, the Reports dropdown, the P&L History
-   page, and now the Segment/Symbol filters in a live browser session -
+   page, the Segment/Symbol filters, and now Tradebook's historical mode +
+   Trade ID column, in a live browser session -
    all built, type-checked/linted/tested, but none clicked end-to-end in a
    browser yet.
-3. Re-run `npm run build` immediately before this filter follow-up's
-   deploy commit (reverted from the working tree after confirming it
-   builds, same reason as both prior rounds).
-4. Deploy this filter follow-up to acc1 the same way as the prior two
-   rounds.
+3. Re-run `npm run build` immediately before this round's deploy commit
+   (reverted from the working tree after confirming it builds, same reason
+   as every prior round).
+4. Deploy this round to acc1 the same way as the prior ones.
 5. Verify one real daily capture run end-to-end on acc1, then acc2, then
    acc3 (Kotak) - acc3 first exercises the Kotak CSV-import column mapping
    for real. Monday market open, by explicit user decision (Sunday deploy,
