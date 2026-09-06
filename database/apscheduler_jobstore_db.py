@@ -43,7 +43,7 @@ HISTORIFY_JOBSTORE_TABLE = "historify_apscheduler_jobs"
 #: not in database/pnl_db.py, for the same reason as the two above: the job
 #: store is small scheduler infrastructure that belongs with the other job
 #: stores in openalgo.db, even though the feature's own trade data lives in
-#: its own isolated db/pnl.db.
+#: its own isolated db/tradebook.db.
 PNL_JOBSTORE_TABLE = "pnl_apscheduler_jobs"
 
 #: A lost write-lock race is transient, so it is retried rather than surfaced.

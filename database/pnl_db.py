@@ -6,12 +6,17 @@ upstream OpenAlgo. Upstream permanently rejected an in-platform "Trade
 Journal" feature (marketcalls/openalgo#1683); this exists purely for our own
 VMs and is not intended to be filed upstream.
 
-Own SQLite file, isolated from the main DB, for the same reason
-``sandbox_db.py`` is isolated: this is a distinct, indefinitely-growing
-persistence domain (real trade history, not app config) with its own backup
-and retention expectations. Mirrors ``sandbox_db.py``'s engine/session setup
-exactly - NullPool, check_same_thread=False, scoped_session registered in
+Own SQLite file (``db/tradebook.db``), isolated from the main DB, for the
+same reason ``sandbox_db.py`` is isolated: this is a distinct,
+indefinitely-growing persistence domain (real trade history, not app
+config) with its own backup and retention expectations. Mirrors
+``sandbox_db.py``'s engine/session setup exactly - NullPool,
+check_same_thread=False, scoped_session registered in
 ``utils/db_sessions.py`` for teardown.
+
+Named for what it actually stores - the raw fill ledger, i.e. a tradebook
+- not "pnl.db": realized P&L is never persisted anywhere, always computed
+on demand at read time (see the two tables below).
 
 Two tables:
 - ``pnl_trades``: the captured/imported per-fill trade ledger. This is the
@@ -61,14 +66,21 @@ load_dotenv()
 # database/engine_factory.py's pooling policy (duplicated here rather than
 # imported, exactly as sandbox_db.py does, so this module has no import-time
 # dependency beyond SQLAlchemy itself).
-PNL_DATABASE_URL = os.getenv("PNL_DATABASE_URL", "sqlite:///db/pnl.db")
+#
+# Named tradebook.db, not pnl.db: this file holds the raw fill ledger only
+# (pnl_trades/pnl_capture_runs) - realized P&L itself is never stored,
+# always computed on demand by utils/pnl_fifo.py at read time. "pnl.db"
+# would have implied a stored P&L value that doesn't exist.
+TRADEBOOK_DATABASE_URL = os.getenv("TRADEBOOK_DATABASE_URL", "sqlite:///db/tradebook.db")
 
-if PNL_DATABASE_URL and "sqlite" in PNL_DATABASE_URL:
+if TRADEBOOK_DATABASE_URL and "sqlite" in TRADEBOOK_DATABASE_URL:
     engine = create_engine(
-        PNL_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
+        TRADEBOOK_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
     )
 else:
-    engine = create_engine(PNL_DATABASE_URL, pool_size=20, max_overflow=40, pool_timeout=10)
+    engine = create_engine(
+        TRADEBOOK_DATABASE_URL, pool_size=20, max_overflow=40, pool_timeout=10
+    )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -142,6 +154,60 @@ def parse_trade_timestamp(value, fallback=None):
     return fallback if fallback is not None else datetime.now()
 
 
+# Segment, alongside the existing exchange/product columns - user-requested
+# addition so a row's broad category is directly visible on the row itself
+# (and trivially filterable with a plain equality check) rather than only
+# derivable by re-checking exchange against a set every time. "mutual_fund"
+# is included for parity with Zerodha Console's own Tradebook segment
+# picker, which this whole filter row is modeled on, but no OpenAlgo
+# exchange constant maps to it today (no MF broker support exists yet) -
+# it will never actually appear on a real row until that changes.
+VALID_SEGMENTS = ("equity", "fno", "currency", "commodity", "mutual_fund")
+
+# Built from utils.constants's own exchange constants rather than hand-typed
+# strings, so this can never silently drift from the canonical exchange
+# list if that module ever changes a code.
+try:
+    from utils.constants import (
+        EXCHANGE_BCD,
+        EXCHANGE_BFO,
+        EXCHANGE_BSE,
+        EXCHANGE_CDS,
+        EXCHANGE_MCX,
+        EXCHANGE_NCDEX,
+        EXCHANGE_NCO,
+        EXCHANGE_NFO,
+        EXCHANGE_NSE,
+    )
+
+    _EXCHANGE_SEGMENT_MAP = {
+        EXCHANGE_NSE: "equity",
+        EXCHANGE_BSE: "equity",
+        EXCHANGE_NFO: "fno",
+        EXCHANGE_BFO: "fno",
+        EXCHANGE_CDS: "currency",
+        EXCHANGE_BCD: "currency",
+        EXCHANGE_MCX: "commodity",
+        EXCHANGE_NCDEX: "commodity",
+        EXCHANGE_NCO: "commodity",  # "NSE Commodities (futures + options)" - commodity segment despite the name
+    }
+except ImportError:
+    # utils.constants is part of this same codebase and always importable in
+    # practice; guarded only so a database-layer module never hard-fails
+    # over an import from an unrelated package.
+    logger.exception("utils.constants unavailable - segment derivation disabled")
+    _EXCHANGE_SEGMENT_MAP = {}
+
+
+def derive_segment(exchange):
+    """Map a raw exchange code to one of VALID_SEGMENTS, or None when it
+    doesn't fit any of them (index/quote-only symbols like NSE_INDEX, or
+    CRYPTO - not a real segment in this scheme and not traded by either
+    broker this feature currently ships for).
+    """
+    return _EXCHANGE_SEGMENT_MAP.get((exchange or "").strip())
+
+
 class PnlTrade(Base):
     """One captured or imported fill. The sole source of truth for the
     multi-day P&L feature - realized P&L is always derived from this table
@@ -164,6 +230,13 @@ class PnlTrade(Base):
     exchange = Column(String(20), nullable=False, index=True)
     product = Column(String(20), nullable=True)
     action = Column(String(10), nullable=False)  # BUY or SELL
+
+    # One of VALID_SEGMENTS, derived from exchange at write time via
+    # derive_segment() - stored rather than recomputed on every read/filter,
+    # and directly visible when inspecting a row. Nullable: a handful of
+    # exchange codes (index/quote symbols, crypto) don't map to any of the
+    # five segments and are left unset rather than guessed.
+    segment = Column(String(20), nullable=True, index=True)
 
     quantity = Column(Float, nullable=False)
     average_price = Column(Float, nullable=False)
@@ -205,11 +278,40 @@ class PnlCaptureRun(Base):
 
 
 def init_db():
-    """Initialize the PnL database and tables. Idempotent - safe on a fresh
-    or pre-existing db/pnl.db, per project persistence discipline (no
-    Alembic; create_all plus targeted migrations if a column is ever added).
+    """Initialize the tradebook database and tables. Idempotent - safe on a
+    fresh or pre-existing db/tradebook.db, per project persistence
+    discipline (no Alembic; create_all plus targeted migrations if a
+    column is ever added).
     """
     from database.db_init_helper import _ensure_sqlite_dir, init_db_with_logging
 
     _ensure_sqlite_dir(engine)
-    init_db_with_logging(Base, engine, "PnL DB", logger)
+    init_db_with_logging(Base, engine, "Tradebook DB", logger)
+    _migrate_add_segment_column()
+
+
+def _migrate_add_segment_column():
+    """Add pnl_trades.segment to a database created before it existed.
+
+    Mirrors sandbox_db.py's own column-migration pattern
+    (_migrate_add_order_gtt_leg_id) - create_all's checkfirst only guards
+    at the table level, so an existing table never gets a newly-added
+    column without an explicit ALTER TABLE.
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(pnl_trades)"))}
+            if not existing or "segment" in existing:
+                return
+            conn.execute(text("ALTER TABLE pnl_trades ADD COLUMN segment VARCHAR(20)"))
+            # ALTER TABLE ADD COLUMN doesn't pick up the model's index=True -
+            # that only fires from create_all - so it's created explicitly.
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_pnl_trades_segment ON pnl_trades(segment)")
+            )
+            conn.commit()
+            logger.info("Added pnl_trades.segment")
+    except Exception:
+        logger.exception("Could not add pnl_trades.segment")

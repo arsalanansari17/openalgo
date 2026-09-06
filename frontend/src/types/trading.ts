@@ -25,6 +25,11 @@ export interface Order {
   timestamp: string
 }
 
+// One of database.pnl_db.VALID_SEGMENTS (fork-only - see openalgo's
+// SKYSHIELD_PATCHES.md). Shared by TradeBook.tsx, PnlHistory.tsx, and
+// api/trading.ts so the value set can't drift between them.
+export type Segment = 'equity' | 'fno' | 'currency' | 'commodity' | 'mutual_fund'
+
 export interface Trade {
   symbol: string
   exchange: string
@@ -41,6 +46,11 @@ export interface Trade {
   // (SKYSHIELD_PATCHES.md) - optional only because older/unmapped brokers
   // may not populate it.
   tradeid?: string
+  // One of database.pnl_db.VALID_SEGMENTS - only ever present on rows from
+  // GET /api/v1/pnl/trades (stored on the row at write time); the live
+  // /tradebook endpoint has no concept of this, so TradeBook.tsx falls back
+  // to deriving it client-side from exchange when this is absent.
+  segment?: string
 }
 
 export interface Holding {

@@ -5,31 +5,27 @@ Fork-only (SKYSHIELD_PATCHES.md). Backs the /api/v1/pnl/history and
 /api/v1/pnl/import REST resources (restx_api/pnl_history.py).
 
 No realized P&L is ever persisted: every request re-reads the raw fills
-from db/pnl.db and re-runs utils/pnl_fifo.py. Matches the intraday PnL
-Tracker's own philosophy (blueprints/pnltracker.py) and the user's explicit
-design call - "this is how zerodha or broker would be doing" - extended
-from one trading day to an arbitrary date range.
+from db/tradebook.db and re-runs utils/pnl_fifo.py. Matches the intraday
+PnL Tracker's own philosophy (blueprints/pnltracker.py) and the user's
+explicit design call - "this is how zerodha or broker would be doing" -
+extended from one trading day to an arbitrary date range.
 """
 
 from datetime import datetime
 
 from database.auth_db import get_auth_token_broker
-from database.pnl_db import PnlTrade, db_session, make_dedup_key, parse_trade_timestamp
-from utils.constants import EXCHANGE_BSE, EXCHANGE_NSE, FNO_EXCHANGES
+from database.pnl_db import (
+    VALID_SEGMENTS,
+    PnlTrade,
+    db_session,
+    derive_segment,
+    make_dedup_key,
+    parse_trade_timestamp,
+)
 from utils.logging import get_logger
 from utils.pnl_fifo import compute_realized_pnl, summarize_by_day
 
 logger = get_logger(__name__)
-
-# "Equity" here is the cash segment (NSE/BSE); "fno" reuses OpenAlgo's own
-# canonical FNO_EXCHANGES (utils/constants.py) rather than redefining a
-# second exchange-segment mapping that could drift from it - covers
-# NFO/BFO/MCX/CDS/BCD/NCDEX/NCO/crypto, the same set every other service
-# already treats as "derivatives" for margin/product-type purposes.
-_SEGMENT_EXCHANGES = {
-    "equity": {EXCHANGE_NSE, EXCHANGE_BSE},
-    "fno": set(FNO_EXCHANGES),
-}
 
 
 def _parse_range_and_build_query(start_date, end_date, symbol=None, segment=None):
@@ -48,9 +44,13 @@ def _parse_range_and_build_query(start_date, end_date, symbol=None, segment=None
             None,
         )
 
-    if segment and segment not in _SEGMENT_EXCHANGES:
+    if segment and segment not in VALID_SEGMENTS:
         return (
-            (False, {"status": "error", "message": "segment must be 'equity' or 'fno'"}, 400),
+            (
+                False,
+                {"status": "error", "message": f"segment must be one of {VALID_SEGMENTS}"},
+                400,
+            ),
             None,
             None,
             None,
@@ -62,12 +62,15 @@ def _parse_range_and_build_query(start_date, end_date, symbol=None, segment=None
     if symbol:
         query = query.filter(PnlTrade.symbol == symbol)
     if segment:
-        # Exchange is a legitimate pre-filter for both consumers: for
-        # get_pnl_history's FIFO matching it's safe because exchange is
-        # already part of the FIFO grouping key (utils/pnl_fifo.py groups by
-        # symbol+exchange+product), and for get_pnl_trades it's just a plain
-        # row filter with no matching involved at all.
-        query = query.filter(PnlTrade.exchange.in_(_SEGMENT_EXCHANGES[segment]))
+        # Filters on the stored segment column (derive_segment(), set once
+        # at write time by both writers) rather than re-deriving from
+        # exchange on every read. Safe as a pre-filter for get_pnl_history's
+        # FIFO matching specifically because exchange - and therefore
+        # segment, which is a pure function of it - is already part of the
+        # FIFO grouping key (utils/pnl_fifo.py groups by
+        # symbol+exchange+product); for get_pnl_trades it's just a plain row
+        # filter with no matching involved at all.
+        query = query.filter(PnlTrade.segment == segment)
 
     return None, query, start, end
 
@@ -81,7 +84,7 @@ def get_pnl_history(
 ):
     """Realized P&L for one account over [start_date, end_date] (inclusive,
     "YYYY-MM-DD"), optionally narrowed to one symbol and/or one segment
-    ("equity" or "fno" - see _SEGMENT_EXCHANGES above).
+    (one of database.pnl_db.VALID_SEGMENTS).
 
     Returns (success, response_dict, status_code) - same tuple shape as
     every other service in services/ (docs/design/27-service-layer).
@@ -214,6 +217,7 @@ def get_pnl_trades(
                 "trade_value": row.trade_value or 0,
                 "orderid": row.orderid or "",
                 "tradeid": row.tradeid or "",
+                "segment": row.segment,
                 "timestamp": row.trade_timestamp.isoformat(sep=" "),
             }
             for row in rows
@@ -299,6 +303,7 @@ def import_trades_csv(api_key: str, rows: list[dict]) -> tuple[bool, dict, int]:
                     symbol=symbol,
                     exchange=exchange,
                     product=row.get("product"),
+                    segment=derive_segment(exchange),
                     action=action,
                     quantity=float(quantity),
                     average_price=float(price),

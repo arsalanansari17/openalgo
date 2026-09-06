@@ -765,11 +765,12 @@ def setup_environment(app):
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
                 ("Agent DB", ensure_agent_tables_exists),
                 # Fork-only (SKYSHIELD_PATCHES.md) - consolidated multi-day
-                # P&L feature. db/pnl.db is its own file, not openalgo.db, so
-                # this doesn't join the write-lock contention the comment
-                # below describes - created here anyway just to keep every
-                # store's table creation on the same boot-time schedule.
-                ("PnL DB", ensure_pnl_tables_exists),
+                # P&L feature's trade ledger. db/tradebook.db is its own
+                # file, not openalgo.db, so this doesn't join the write-lock
+                # contention the comment below describes - created here
+                # anyway just to keep every store's table creation on the
+                # same boot-time schedule.
+                ("Tradebook DB", ensure_pnl_tables_exists),
                 # Created here, not left to APScheduler's own CREATE TABLE in
                 # scheduler.start(). That DDL would otherwise run further down
                 # this function, after db_ready releases the rest of the boot,

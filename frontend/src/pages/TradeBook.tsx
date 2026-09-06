@@ -45,7 +45,7 @@ import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
-import type { Trade } from '@/types/trading'
+import type { Segment, Trade } from '@/types/trading'
 import { showToast } from '@/utils/toast'
 
 interface FilterState {
@@ -61,14 +61,30 @@ interface SortConfig {
   direction: 'asc' | 'desc'
 }
 
-// Fork-only historical view (SKYSHIELD_PATCHES.md): Segment maps to
-// exchange codes, mirroring services/pnl_history_service.py's
-// _SEGMENT_EXCHANGES exactly - equity is the cash segment, fno reuses the
-// same derivatives set as utils.constants.FNO_EXCHANGES on the backend.
+// Fork-only historical view (SKYSHIELD_PATCHES.md): mirrors
+// database/pnl_db.py's derive_segment()/_EXCHANGE_SEGMENT_MAP exactly.
 // Kept in sync by hand since the frontend has no import path into that
-// Python module; if that set changes, update this one too.
-const EQUITY_EXCHANGES = new Set(['NSE', 'BSE'])
-const FNO_EXCHANGES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX', 'NCO', 'CRYPTO'])
+// Python module; if that mapping changes, update this one too. Live-today
+// Trade objects have no `segment` field at all (the broker's own tradebook
+// API doesn't have this concept), so this is the fallback used for those -
+// historical rows from GET /api/v1/pnl/trades carry a real stored
+// `segment` already and this is never called for them (see
+// segmentOf below).
+const EXCHANGE_SEGMENT_MAP: Record<string, Segment> = {
+  NSE: 'equity',
+  BSE: 'equity',
+  NFO: 'fno',
+  BFO: 'fno',
+  CDS: 'currency',
+  BCD: 'currency',
+  MCX: 'commodity',
+  NCDEX: 'commodity',
+  NCO: 'commodity',
+}
+
+function segmentOf(trade: Trade): Segment | undefined {
+  return (trade.segment as Segment | undefined) ?? EXCHANGE_SEGMENT_MAP[trade.exchange]
+}
 
 function todayStr(): string {
   return new Date().toISOString().split('T')[0]
@@ -147,7 +163,7 @@ export default function TradeBook() {
   // broker call below - changing either date switches to the ledger-backed
   // GET /api/v1/pnl/trades, since today's trades aren't captured into the
   // ledger until the 16:00 IST daily job runs.
-  const [segment, setSegment] = useState<'all' | 'equity' | 'fno'>('all')
+  const [segment, setSegment] = useState<'all' | Segment>('all')
   const [symbolFilter, setSymbolFilter] = useState('')
   const [startDate, setStartDate] = useState(todayStr())
   const [endDate, setEndDate] = useState(todayStr())
@@ -166,8 +182,7 @@ export default function TradeBook() {
       if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
-      if (segment === 'equity' && !EQUITY_EXCHANGES.has(trade.exchange)) return false
-      if (segment === 'fno' && !FNO_EXCHANGES.has(trade.exchange)) return false
+      if (segment !== 'all' && segmentOf(trade) !== segment) return false
       if (
         symbolFilter &&
         !trade.symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase())
@@ -559,6 +574,9 @@ export default function TradeBook() {
                   <SelectItem value="all">All</SelectItem>
                   <SelectItem value="equity">Equity</SelectItem>
                   <SelectItem value="fno">Futures & Options</SelectItem>
+                  <SelectItem value="currency">Currency</SelectItem>
+                  <SelectItem value="commodity">Commodity</SelectItem>
+                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
                 </SelectContent>
               </Select>
             </div>

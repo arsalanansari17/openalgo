@@ -7,9 +7,9 @@ database/pnl_db.py's module docstring for why.
 Pulls today's tradebook once after market close, normalizes it through the
 *existing* services/tradebook_service.py (never a broker module directly, so
 this is broker-agnostic for free - Design Principles: "Broker-Agnostic
-Contract"), and idempotently upserts each fill into db/pnl.db. Realized P&L
-itself is never computed or stored here - that happens on read, in
-services/pnl_history_service.py.
+Contract"), and idempotently upserts each fill into db/tradebook.db.
+Realized P&L itself is never computed or stored here - that happens on
+read, in services/pnl_history_service.py.
 
 Scheduling mirrors services/historify_scheduler_service.py: a singleton
 BackgroundScheduler backed by a persisted SQLAlchemyJobStore
@@ -38,6 +38,7 @@ from database.pnl_db import (
     PnlCaptureRun,
     PnlTrade,
     db_session,
+    derive_segment,
     make_dedup_key,
     parse_trade_timestamp,
 )
@@ -133,6 +134,7 @@ def capture_today_trades(auth_token: str, broker: str) -> dict:
                     symbol=trade.get("symbol"),
                     exchange=trade.get("exchange"),
                     product=trade.get("product"),
+                    segment=derive_segment(trade.get("exchange")),
                     action=trade.get("action"),
                     quantity=float(trade.get("quantity") or 0),
                     average_price=float(trade.get("average_price") or 0),

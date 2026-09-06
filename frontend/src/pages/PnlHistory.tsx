@@ -12,6 +12,7 @@ import { Loader2, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { useState } from 'react'
 import type { PnlHistoryClosedTrade, PnlHistoryDailyRow } from '@/api/trading'
 import { tradingApi } from '@/api/trading'
+import type { Segment } from '@/types/trading'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -49,7 +50,7 @@ export default function PnlHistory() {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = makeFormatCurrency(user?.broker)
 
-  const [segment, setSegment] = useState<'all' | 'equity' | 'fno'>('all')
+  const [segment, setSegment] = useState<'all' | Segment>('all')
   const [symbol, setSymbol] = useState('')
   const [startDate, setStartDate] = useState(defaultStartDate())
   const [endDate, setEndDate] = useState(defaultEndDate())
@@ -122,6 +123,9 @@ export default function PnlHistory() {
                   <SelectItem value="all">All</SelectItem>
                   <SelectItem value="equity">Equity</SelectItem>
                   <SelectItem value="fno">Futures & Options</SelectItem>
+                  <SelectItem value="currency">Currency</SelectItem>
+                  <SelectItem value="commodity">Commodity</SelectItem>
+                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -45,7 +45,7 @@ services/tradebook_service.py (existing, unmodified)
 services/pnl_capture_service.py  --daily, APScheduler-- >  database/pnl_db.py
         (capture)                                          (pnl_trades,
                                                               pnl_capture_runs -
-                                                              db/pnl.db,
+                                                              db/tradebook.db,
                                                               isolated file)
                                                                    ^
 restx_api/pnl_history.py (POST /pnl/import) ----------------------|
@@ -67,7 +67,7 @@ frontend/src/pages/TradeBook.tsx ("Upload" button, next to the existing
 
 | File | New/Touched | Purpose |
 |---|---|---|
-| `database/pnl_db.py` | New | Own isolated SQLite store (`db/pnl.db`); `pnl_trades` (the ledger) and `pnl_capture_runs` (job audit log); `make_dedup_key`/`parse_trade_timestamp` shared helpers |
+| `database/pnl_db.py` | New | Own isolated SQLite store (`db/tradebook.db`); `pnl_trades` (the ledger) and `pnl_capture_runs` (job audit log); `make_dedup_key`/`parse_trade_timestamp` shared helpers |
 | `utils/pnl_fifo.py` | New | Pure FIFO matcher - no I/O, no Flask |
 | `services/pnl_capture_service.py` | New | Daily capture job + `PnlCaptureScheduler` singleton (mirrors `HistorifyScheduler`) |
 | `services/pnl_history_service.py` | New | Compute-on-read history service + CSV-import persistence |
@@ -79,7 +79,7 @@ frontend/src/pages/TradeBook.tsx ("Upload" button, next to the existing
 | `utils/db_sessions.py` | Touched | One line: register `database.pnl_db`'s scoped session for teardown |
 | `app.py` | Touched | One `db_init_functions` entry, one scheduler-startup `try/except` block (same shape repeated for Flow/Historify) |
 | `restx_api/__init__.py` | Touched | Import + `add_namespace(pnl_history_ns, path="/pnl")` - a second namespace sharing `pnl_symbols_ns`'s existing path; verified no route collision |
-| `.sample.env` | Touched | Documents `PNL_DATABASE_URL` default alongside the other five store URLs |
+| `.sample.env` | Touched | Documents `TRADEBOOK_DATABASE_URL` default alongside the other five store URLs |
 
 Every touch to an existing upstream file is a small, additive, low-churn
 change mirroring a pattern that already repeats 3-4 times in that same file
@@ -96,6 +96,14 @@ composite of orderid/symbol/exchange/action/quantity/price/timestamp when
 not. Numeric fields are coerced to a fixed-precision string before hashing
 so `100`, `100.0`, and `"100"` from different callers (capture vs. CSV
 import) hash identically.
+
+`segment` - one of `database.pnl_db.VALID_SEGMENTS` (`equity`, `fno`,
+`currency`, `commodity`, `mutual_fund`) - is computed once at write time by
+`derive_segment(exchange)` and stored on the row, rather than re-derived
+from `exchange` on every read/filter. Nullable: a few exchange codes
+(index/quote symbols, crypto) don't map to any of the five and are left
+unset. See "Segment and Symbol filters" below for why this replaced an
+earlier query-time-only, two-value (`equity`/`fno`) version.
 
 **`pnl_capture_runs`** - one row per attempted daily capture, so a silent
 failure (broker API down, auth expired) is a visible gap rather than
@@ -207,22 +215,56 @@ Console's own Reports menu - Tradebook and P&L as its two options for now
 Added after seeing the page live, comparing against Zerodha Console's own
 Tradebook/P&L filter row (Segment, Symbol, Date range). Symbol was already
 supported server-side (`get_pnl_history`'s `symbol` param existed from the
-first version) but never wired to the UI; Segment ("Equity" vs "Futures &
-Options") is new on both ends.
+first version) but never wired to the UI; Segment is new on both ends.
 
-`services/pnl_history_service.py::get_pnl_history` gained a `segment`
-param, filtering `PnlTrade.exchange` before FIFO matching - safe because
-exchange is already part of the FIFO grouping key
-(`utils/pnl_fifo.py` groups by symbol+exchange+product), so a segment
-filter can never split one FIFO queue across the filter boundary. The
-exchange sets aren't reinvented: "equity" is `{NSE, BSE}`, "fno" reuses
-`utils.constants.FNO_EXCHANGES` directly (NFO/BFO/MCX/CDS/BCD/NCDEX/NCO/
-crypto - the same set every other OpenAlgo service already treats as
-"derivatives"), so this can never drift from the canonical definition.
+**First version** (query-time only, two values): `services/
+pnl_history_service.py::get_pnl_history` filtered `PnlTrade.exchange`
+directly against two hardcoded sets - "equity" = `{NSE, BSE}`, "fno" =
+`utils.constants.FNO_EXCHANGES` (which bundles NFO/BFO/MCX/CDS/BCD/NCDEX/
+NCO/crypto together). Filtering pre-FIFO was safe because exchange is
+already part of the FIFO grouping key (`utils/pnl_fifo.py` groups by
+symbol+exchange+product).
+
+**Current version** (stored column, five values): the same day, comparing
+against Zerodha Console's actual segment list, the two-value bundle was
+replaced with five: Equity, Futures & Options, Currency, Commodity, Mutual
+Funds - see the Data model section above for the exact exchange mapping
+(`database/pnl_db.py::derive_segment`/`_EXCHANGE_SEGMENT_MAP`). Filtering
+now checks the *stored* `PnlTrade.segment` column
+(`WHERE segment = ?`) rather than an exchange-set membership test computed
+fresh on every query - simpler, and the value is directly visible when
+inspecting a row rather than only derivable by re-checking exchange.
 `restx_api/pnl_history_schema.py`'s `segment` field validates against
-`OneOf(["equity", "fno"])` - the frontend sends `undefined` (dropped by
-axios, not an empty string) rather than a literal "all" value for the
-unfiltered case, since the schema has no third valid value for it.
+`OneOf(list(database.pnl_db.VALID_SEGMENTS))`, importing the tuple rather
+than hardcoding a second copy of the five values. "mutual_fund" is
+accepted by the schema and appears in both dropdowns for parity with the
+Zerodha reference, but no OpenAlgo exchange constant maps to it - no real
+row will ever carry that segment until MF broker support exists.
+
+The frontend has no import path into `database/pnl_db.py`, so
+`frontend/src/pages/TradeBook.tsx`'s `EXCHANGE_SEGMENT_MAP` mirrors
+`_EXCHANGE_SEGMENT_MAP` by hand (kept in sync manually - update both if the
+mapping ever changes). This fallback is only reached for live-today Trade
+rows, which have no `segment` field at all (the broker's own tradebook API
+doesn't have this concept); historical rows from `GET /api/v1/pnl/trades`
+carry the real stored value already. The `Segment` type itself lives once
+in `frontend/src/types/trading.ts`, imported by `TradeBook.tsx`,
+`PnlHistory.tsx`, and `api/trading.ts` so the value set can't drift between
+them.
+
+**Migration**: `pnl_trades.segment` was added to an already-deployed (but
+still-empty on every VM) table via `database/pnl_db.py::_migrate_add_
+segment_column`, mirroring `sandbox_db.py`'s own column-migration pattern
+exactly (`PRAGMA table_info` check, `ALTER TABLE ADD COLUMN`, explicit
+index creation since `ALTER TABLE` doesn't pick up the model's
+`index=True`).
+
+**Rename**: the store itself was renamed from `db/pnl.db`
+(`PNL_DATABASE_URL`) to `db/tradebook.db` (`TRADEBOOK_DATABASE_URL`) in the
+same round - it holds the raw fill ledger only, never a computed P&L
+value, so "pnl.db" was a misleading name from the start. Safe to rename
+outright (no migration needed) since every VM's copy was still empty at
+the time.
 
 ## Import UI
 
@@ -245,19 +287,26 @@ page only" over a full dedicated import page or a bare API-only endpoint.
 
 ## Status (as of 2026-09-06)
 
-**Deployed and live on acc1.** Backend + Upload button deployed first;
-verified on the running service: `db/pnl.db` created with both tables,
-`pnl_apscheduler_jobs` has the daily-capture job registered, no errors in
-`journalctl`, and the served `TradeBook-*.js` bundle contains the new
-import strings. The Reports dropdown + P&L History page (this section's
-own subject) is a same-day follow-up built after seeing the first deploy
-live - type-checks, lints, and unit tests (`navigation.test.ts`,
-`Navbar.test.tsx`, `MobileBottomNav.test.tsx`) all pass, `npm run build`
-confirmed compiling, ready for the same deploy procedure.
+**Deployed and live on acc1**, in four same-day rounds, each verified
+directly on the running service after deploy (not just built locally):
+storage + daily capture + Upload button; the Reports dropdown + P&L
+History page; Segment/Symbol filters (two-value version, since superseded);
+Tradebook's historical view + Trade ID column. See `SKYSHIELD_PATCHES.md`
+for the full chronological log of each round's specific verification
+evidence.
 
-**Still unverified**: no real trade has been captured or imported yet on
-any account (Sunday, markets closed - deployed ahead of Monday's live
-verification, by explicit user decision); the CSV column-alias mapper
-against a real exported file from either broker; the Upload button and the
-new P&L History page have not been clicked in a live browser session, only
-built and type/lint/unit-tested.
+**Pending deploy** (this section's most recent edit): the stored `segment`
+column (five values, replacing the two-value query-time version) and the
+`db/pnl.db` -> `db/tradebook.db` rename - built and verified locally
+(migration tested against a simulated pre-existing table, `derive_segment`
+checked against every mapped exchange, a full equity/currency/commodity
+split test, schema validation for all five values including the
+never-yet-real `mutual_fund`), not yet pushed to any VM.
+
+**Still unverified anywhere**: no real trade has been captured or imported
+on any account yet (deployed ahead of Monday market open, by explicit user
+decision); the CSV column-alias mapper against a real exported file from
+either broker; every UI surface (Upload button, Reports dropdown, P&L
+History page, Tradebook's historical mode, all the Segment/Symbol filters)
+has been type-checked/linted/unit-tested but never clicked through in an
+actual browser session.

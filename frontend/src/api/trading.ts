@@ -8,6 +8,7 @@ import type {
   PlaceOrderRequest,
   PortfolioStats,
   Position,
+  Segment,
   Trade,
 } from '@/types/trading'
 import { apiClient, webClient } from './client'
@@ -254,7 +255,7 @@ export const tradingApi = {
     apiKey: string,
     startDate: string,
     endDate: string,
-    options?: { symbol?: string; segment?: 'equity' | 'fno' }
+    options?: { symbol?: string; segment?: Segment }
   ): Promise<ApiResponse<PnlHistoryData>> => {
     const response = await apiClient.get<ApiResponse<PnlHistoryData>>('/pnl/history', {
       params: {

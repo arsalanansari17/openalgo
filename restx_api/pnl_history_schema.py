@@ -10,17 +10,21 @@ account_schema.py wholesale without touching this at all.
 
 from marshmallow import Schema, fields, validate
 
+from database.pnl_db import VALID_SEGMENTS
+
 
 class PnlHistorySchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     start_date = fields.Str(required=True, validate=validate.Length(equal=10))
     end_date = fields.Str(required=True, validate=validate.Length(equal=10))
     symbol = fields.Str(required=False, load_default=None)
-    # "equity" (NSE/BSE cash) or "fno" (derivatives - reuses OpenAlgo's own
-    # FNO_EXCHANGES, see services/pnl_history_service.py). Omitted/empty
-    # means no segment filter.
+    # One of database.pnl_db.VALID_SEGMENTS. "mutual_fund" is accepted for
+    # parity with Zerodha Console's own segment picker (the reference this
+    # filter row is modeled on) even though no OpenAlgo exchange constant
+    # maps to it today - it will simply never match a real row until MF
+    # broker support exists. Omitted/empty means no segment filter.
     segment = fields.Str(
-        required=False, load_default=None, validate=validate.OneOf(["equity", "fno"])
+        required=False, load_default=None, validate=validate.OneOf(list(VALID_SEGMENTS))
     )
 
 

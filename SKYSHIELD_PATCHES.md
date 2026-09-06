@@ -1276,28 +1276,54 @@ it from the existing live broker call to a new `GET /api/v1/pnl/trades`
 data-source switch and why it's needed - today's trades aren't in the
 ledger until the 16:00 IST capture job runs). Also added the previously-
 missing **Trade ID** column (already correctly emitted end-to-end since
-the tradebook fix, just never rendered). Built and locally verified
+the tradebook fix, just never rendered). Built, locally verified
 (`get_pnl_trades` tested directly - correct rows, correct segment split,
-correct descending order; `tsc -b`/`biome`/`npm run build` all clean),
-**not yet deployed** as of this edit.
+correct descending order; `tsc -b`/`biome`/`npm run build` all clean), and
+**deployed to acc1** (commits `6a8682ab5` feature + `c3eefe6a1` dist
+rebuild, restarted clean, served bundle confirmed containing the new
+"Trade ID"/`pnl/trades` strings).
+
+**Same-day follow-up #4**: two more user-requested changes, landing
+together. (1) Segment expands from two query-time-only values
+(equity/fno, the latter bundling currency+commodity+crypto) to five real
+values matching Zerodha Console's own list - Equity, Futures & Options,
+Currency, Commodity, Mutual Funds - and becomes a **stored column** on
+`pnl_trades` (`derive_segment(exchange)`, computed once at write time by
+both writers) rather than a filter recomputed from exchange on every read.
+(2) The store itself renamed `db/pnl.db` -> `db/tradebook.db`
+(`PNL_DATABASE_URL` -> `TRADEBOOK_DATABASE_URL`) - it only ever held the
+raw fill ledger, never a computed P&L value, so the old name was
+misleading. Full reasoning, the exchange->segment mapping, the migration
+approach, and the frontend Segment-type sharing all in
+`docs/design/56-pnl-history/README.md`'s "Segment and Symbol filters"
+subsection (rewritten, not just appended to). Built and locally verified
+(migration tested against a simulated pre-existing table - confirmed it
+adds the column and index correctly; `derive_segment` checked against
+every mapped exchange plus unmapped ones; a three-way equity/currency/
+commodity split test summing correctly; schema validation for all five
+values), **not yet deployed** as of this edit.
 
 ### Next steps
 
-1. User review of the Tradebook-historical-view diff before committing it
-   (standing rule) - the two rounds above are already committed and
-   deployed; this is the next, still-pending piece.
+1. User review of the segment/rename diff before committing it (standing
+   rule) - the three rounds above are already committed and deployed; this
+   is the next, still-pending piece.
 2. Click-test the Upload button, the Reports dropdown, the P&L History
-   page, the Segment/Symbol filters, and now Tradebook's historical mode +
-   Trade ID column, in a live browser session -
-   all built, type-checked/linted/tested, but none clicked end-to-end in a
+   page, all five Segment values in both filter rows, and Tradebook's
+   historical mode + Trade ID column, in a live browser session - all
+   built, type-checked/linted/tested, but none clicked end-to-end in a
    browser yet.
 3. Re-run `npm run build` immediately before this round's deploy commit
    (reverted from the working tree after confirming it builds, same reason
    as every prior round).
-4. Deploy this round to acc1 the same way as the prior ones.
+4. Deploy this round to acc1 the same way as the prior ones - watch the
+   migration log line ("Added pnl_trades.segment") in `journalctl` to
+   confirm it actually ran, since the column doesn't exist on acc1 yet.
 5. Verify one real daily capture run end-to-end on acc1, then acc2, then
    acc3 (Kotak) - acc3 first exercises the Kotak CSV-import column mapping
-   for real. Monday market open, by explicit user decision (Sunday deploy,
+   for real, and is the only account with a real commodity/currency
+   segment likely to appear given Kotak's broader instrument access.
+   Monday market open, by explicit user decision (Sunday deploy,
    fix-if-needed live rather than delaying further).
 6. Build the AlgoMirror-side thin aggregator once at least one account's
    `/api/v1/pnl/history` is confirmed live.
