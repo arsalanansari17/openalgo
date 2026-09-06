@@ -136,24 +136,40 @@ P&L History.
 The real constraint: today's trades aren't in `pnl_trades` until the
 16:00 IST daily capture job runs, so Tradebook can't switch to the ledger
 unconditionally without losing live intraday visibility. Resolution:
-`isHistorical = startDate !== today || endDate !== today`. At the default
-(today/today), `fetchTrades` keeps calling the existing live
-`services/tradebook_service.py`-backed `/tradebook` endpoint, unchanged.
-Moving either date away from today switches to the new
-`GET /api/v1/pnl/trades` (`services/pnl_history_service.py::get_pnl_trades`)
-- raw ledger rows, no FIFO matching at all (unlike `/pnl/history`, which is
-FIFO-matched realized P&L - these are deliberately different shapes for
-deliberately different questions: "what did I trade" vs. "what did I
-realize").
+`isHistorical = startDate !== today || endDate !== today`. Only when the
+range is exactly today/today does `fetchTrades` fall back to the existing
+live `services/tradebook_service.py`-backed `/tradebook` endpoint,
+unchanged. Any other range uses the new `GET /api/v1/pnl/trades`
+(`services/pnl_history_service.py::get_pnl_trades`) - raw ledger rows, no
+FIFO matching at all (unlike `/pnl/history`, which is FIFO-matched
+realized P&L - these are deliberately different shapes for deliberately
+different questions: "what did I trade" vs. "what did I realize").
+
+**Default range is the last 7 days** (start = today-7, end = today),
+matching the Zerodha Console reference - so `isHistorical` is `true` by
+default and the page opens on the ledger view, not the live-today view.
+Narrowing the range to just today switches back to live.
 
 Segment and Symbol are applied as **client-side** filters uniformly across
-both data sources in `sortedAndFilteredTrades` (a `EQUITY_EXCHANGES`/
-`FNO_EXCHANGES` set mirrored by hand from `_SEGMENT_EXCHANGES` on the
-backend, since the frontend has no import path into that Python module -
-keep them in sync if the backend set ever changes) - simpler than
-conditionally skipping server-side filtering for the live path, which
-doesn't support it at all (the broker's tradebook API takes no segment
-param).
+both data sources in `sortedAndFilteredTrades`, via `segmentOf()` -
+preferring a row's own stored `segment` (present on historical rows from
+`/pnl/trades`) and falling back to `EXCHANGE_SEGMENT_MAP`, a hand-mirrored
+copy of `derive_segment()`/`_EXCHANGE_SEGMENT_MAP` on the backend for the
+live-today path, which has no `segment` field at all (the broker's own
+tradebook API doesn't have this concept).
+
+**Fetch button**: added after the Segment/Symbol/Date filters landed,
+matching `PnlHistory.tsx`'s pattern exactly. Data only auto-loads once, on
+mount (or when `apiKey` first becomes available) - editing Segment,
+Symbol, or either date no longer triggers an automatic re-fetch, since
+that would fire a request per keystroke/date-picker interaction. The
+mount effect deliberately depends on `[apiKey]`, not `[fetchTrades]` (that
+would defeat the point, since `fetchTrades`'s own identity changes on
+every filter edit) - flagged with a `biome-ignore lint/correctness/
+useExhaustiveDependencies` comment rather than silently disabling the
+rule project-wide. The existing header "Refresh" button is unchanged and
+does the same thing as "Fetch" - left as-is rather than removed, since
+removing it wasn't asked for.
 
 A **Trade ID** column was added to the table (and CSV export) alongside
 the existing Order ID - it was already correctly emitted end-to-end for

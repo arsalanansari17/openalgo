@@ -90,6 +90,12 @@ function todayStr(): string {
   return new Date().toISOString().split('T')[0]
 }
 
+function sevenDaysAgoStr(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 7)
+  return d.toISOString().split('T')[0]
+}
+
 /**
  * Helper to convert various broker timestamp formats into a sortable number.
  * Ensures chronological accuracy for non-ISO formats.
@@ -159,13 +165,15 @@ export default function TradeBook() {
   const [isImporting, setIsImporting] = useState(false)
 
   // Historical view (fork-only - SKYSHIELD_PATCHES.md). Default date range
-  // is today on both ends, which keeps fetchTrades on the existing live
-  // broker call below - changing either date switches to the ledger-backed
-  // GET /api/v1/pnl/trades, since today's trades aren't captured into the
-  // ledger until the 16:00 IST daily job runs.
+  // is the last 7 days, matching the Zerodha Console reference this filter
+  // row is modeled on - end date defaults to today, so isHistorical is true
+  // by default and fetchTrades starts on the ledger-backed
+  // GET /api/v1/pnl/trades. Narrowing the range to today only switches back
+  // to the existing live broker call, since today's trades aren't captured
+  // into the ledger until the 16:00 IST daily job runs.
   const [segment, setSegment] = useState<'all' | Segment>('all')
   const [symbolFilter, setSymbolFilter] = useState('')
-  const [startDate, setStartDate] = useState(todayStr())
+  const [startDate, setStartDate] = useState(sevenDaysAgoStr())
   const [endDate, setEndDate] = useState(todayStr())
   const isHistorical = startDate !== todayStr() || endDate !== todayStr()
 
@@ -267,9 +275,16 @@ export default function TradeBook() {
     [apiKey, isHistorical, startDate, endDate]
   )
 
+  // Runs once on mount (and again if apiKey only becomes available after
+  // mount) - deliberately not depending on fetchTrades itself, which also
+  // changes identity on every Segment/Symbol/date edit. Re-fetching on
+  // every such edit would fire a request per keystroke/date-picker
+  // interaction; the explicit Fetch button below is the trigger for that
+  // instead, matching PnlHistory.tsx's pattern.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - see comment above
   useEffect(() => {
     fetchTrades()
-  }, [fetchTrades])
+  }, [apiKey])
 
   // Refresh on order events instead of polling
   useOrderEventRefresh(fetchTrades, {
@@ -614,6 +629,18 @@ export default function TradeBook() {
                 onChange={(e) => setEndDate(e.target.value)}
               />
             </div>
+            <Button
+              onClick={() => fetchTrades(true)}
+              disabled={isRefreshing}
+              aria-label="Fetch trades for the selected filters"
+            >
+              {isRefreshing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Fetch
+            </Button>
           </div>
         </CardContent>
       </Card>

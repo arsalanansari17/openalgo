@@ -1326,21 +1326,38 @@ overwrite). Also fixed `TradeBook.tsx`'s import error handler to surface
 the real backend message (matching the existing `ActionCenter.tsx`
 pattern) instead of a hardcoded string - this bug's own error message
 would have pointed straight at the real cause if that had been in place
-from the start. `tsc -b`/`biome`/`npm run build` all clean, **not yet
+from the start. `tsc -b`/`biome`/`npm run build` all clean, and
+**deployed to acc1** (commits `cf974b60d` fix + `8068fe6ec` dist rebuild,
+restarted clean).
+
+**Same-day follow-up #6**: two more small UX asks after the fix landed.
+(1) Tradebook's default date range changes from today/today to the last 7
+days (start = today-7, end = today) - matching the Zerodha Console
+reference, and meaning `isHistorical` is now `true` by default, so the
+page opens on the ledger view rather than the live-today view. (2) A
+"Fetch" button, matching `PnlHistory.tsx`'s pattern exactly, added next to
+the date filters. This changes the auto-fetch behavior too: previously,
+editing any filter immediately re-fetched (since the mount effect
+depended on `fetchTrades`, whose identity changes on every Segment/
+Symbol/date edit) - now data only auto-loads once on mount (effect
+depends on `[apiKey]` instead, flagged with a `biome-ignore` comment
+rather than silently disabling the rule project-wide), and "Fetch" is the
+explicit trigger afterward. The existing header "Refresh" button is
+unchanged. `tsc -b`/`biome`/`npm run build` all clean, **not yet
 deployed** as of this edit.
 
 ### Next steps
 
-1. User review of this fix's diff before committing it (standing rule) -
-   the four rounds above are already committed and deployed; this is the
+1. User review of this round's diff before committing it (standing rule) -
+   the five rounds above are already committed and deployed; this is the
    next, still-pending piece.
-2. Deploy this fix to acc1, then have the user retry the real CSV upload
-   that originally failed - this is the first genuine end-to-end click
-   test of the whole feature, not just another "type-checks and builds"
-   verification.
+2. Deploy this round to acc1, then have the user retry the real CSV
+   upload that originally failed under the multipart bug - still the
+   first genuine end-to-end click test of the whole feature.
 3. Once upload succeeds, click-test the Reports dropdown, the P&L History
-   page, all five Segment values in both filter rows, and Tradebook's
-   historical mode + Trade ID column against the newly-imported real data.
+   page, all five Segment values in both filter rows, Tradebook's
+   historical mode + Trade ID column, the new 7-day default, and the
+   Fetch button, against the newly-imported real data.
 4. Re-run `npm run build` immediately before this round's deploy commit
    (reverted from the working tree after confirming it builds, same reason
    as every prior round).
