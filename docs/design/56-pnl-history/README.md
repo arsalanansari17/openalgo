@@ -333,6 +333,50 @@ to `'day'`. No new fetch is triggered by switching tabs; both `daily` and
 `closedTrades` are already in state from the last Fetch, so the toggle is
 purely a client-side render switch.
 
+### Heat maps
+
+Added 2026-09-06, same day: user asked about the calendar heat maps on
+Zerodha Console's own reports - confirmed via Zerodha's support docs there
+are two, distinct in both data and color:
+
+- **P&L report's heat map**: green/red by that day's gross realized P&L,
+  shade intensity scaled to magnitude (lighter = smaller swing, darker =
+  larger). Hovering a tile shows the day's realized P&L.
+- **Tradebook report's heat map**: blue by that day's trade count, shade
+  intensity scaled to volume (4 levels per Zerodha's own docs - lighter =
+  fewer trades, darker = more). Clicking a tile drills into that day's
+  trades on the real Console; this fork's version shows the count on
+  hover instead, since drill-down would just reopen the same trade list
+  already on the page below it, filtered to one day.
+
+Both are the same calendar-grid layout with a different value and color
+function, so the layout itself lives once in `frontend/src/components/
+reports/CalendarHeatmap.tsx` (new) - a `CalendarHeatmap` component taking
+`days: {date, value, tooltip}[]`, a `startDate`/`endDate` (for month
+enumeration and to gray out days outside the fetched range even when they
+fall inside a rendered month), and a `colorFor(value, maxAbs)` function.
+Each page supplies its own data and color scale:
+
+- `PnlHistory.tsx`: `heatmapDays` maps `daily` (already in state from the
+  last Fetch) to `{date, value: realized_pnl, tooltip}`; `pnlHeatColor`
+  does the green/red scale. Rendered as its own Card, always visible above
+  the Day-wise/Trade-wise toggle (a user decision - "always visible above
+  the toggle" over a third tab - since it's a single at-a-glance summary
+  rather than another detail view to switch to).
+- `TradeBook.tsx`: `tradeHeatmapDays` groups `sortedAndFilteredTrades`
+  (already Segment/Symbol/date-filtered) by day via a new `dateKeyOf`
+  helper - reads the `YYYY-MM-DD` prefix directly when the timestamp is
+  already ISO-shaped (every historical/ledger row), otherwise falls back
+  through the existing `parseTimestamp` and reads the calendar date in the
+  browser's local timezone (the same implicit timezone assumption
+  `formatTime`'s `toLocaleTimeString('en-IN', ...)` already makes
+  elsewhere on this page, not a new one). `tradeCountHeatColor` does the
+  blue scale. Rendered above the Trades Table, below the Stats Cards.
+
+Both heat maps are pure client-side renders of data already being
+fetched for their page's table/breakdown - no new endpoint, no new
+request on render.
+
 ## Import UI
 
 An "Upload" button sits next to the existing "Export" button on the Trade

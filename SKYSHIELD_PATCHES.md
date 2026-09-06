@@ -1358,22 +1358,44 @@ unused until now) - a `view: 'day' | 'trade'` state var picks which Card
 renders, defaulting to `'day'`. Purely a client-side render switch: both
 `daily` and `closedTrades` are already in state from the last Fetch, so
 no new request fires on tab switch. `tsc -b`/`biome`/`npm run build` all
-clean, **not yet deployed** as of this edit.
+clean, **deployed to acc1** (commits `4e491b136` fix + `65b4dc890` dist
+rebuild, verified via `git log`, a `grep -c` hit on the deployed
+`PnlHistory-*.js` bundle for "Day-wise", a 200 from `curl` against
+`/pnl-history`, and a clean `journalctl` aside from the same recurring
+`InvalidStateError` WebSocket-shutdown noise seen on every restart this
+whole session).
+
+**Same-day follow-up #8**: user asked about a heat map seen on a Zerodha
+Console screenshot. Confirmed via Zerodha's own support docs (fetched
+directly, not guessed) there are two separate ones - the P&L report's
+green/red-by-realized-P&L map, and the Tradebook report's blue-by-
+trade-count map (the user asked about this second one specifically after
+the first). Built both, sharing one new layout component:
+`frontend/src/components/reports/CalendarHeatmap.tsx` (new) - takes
+`days: {date, value, tooltip}[]` + a `colorFor(value, maxAbs)` function,
+handles month enumeration and calendar-grid rendering once. `PnlHistory.
+tsx` feeds it `daily` (green/red, always visible above the Day-wise/
+Trade-wise toggle - user's explicit placement choice over a third tab).
+`TradeBook.tsx` feeds it `sortedAndFilteredTrades` grouped by day via a
+new `dateKeyOf` helper (blue, above the Trades Table). See
+`docs/design/56-pnl-history/README.md`'s new "Heat maps" subsection for
+the full color-scale and timezone-handling detail. `tsc -b`/`biome`/
+`npm run build` all clean, **not yet deployed** as of this edit.
 
 ### Next steps
 
 1. User review of this round's diff before committing it (standing rule) -
-   the six rounds above are already committed and deployed; this is the
+   the seven rounds above are already committed and deployed; this is the
    next, still-pending piece.
 2. Deploy this round to acc1.
 3. Have the user retry the real CSV upload that originally failed under
    the multipart bug - still the first genuine end-to-end click test of
    the whole feature, still unconfirmed as of this edit.
 4. Once upload succeeds, click-test the Reports dropdown, the P&L History
-   page (including the new Day-wise/Trade-wise toggle), all five Segment
+   page (Day-wise/Trade-wise toggle + its heat map), all five Segment
    values in both filter rows, Tradebook's historical mode + Trade ID
-   column, the 7-day default, and the Fetch button, against the
-   newly-imported real data.
+   column + its own heat map, the 7-day default, and the Fetch button,
+   against the newly-imported real data.
 5. Re-run `npm run build` immediately before this round's deploy commit
    (reverted from the working tree after confirming it builds, same reason
    as every prior round).

@@ -9,10 +9,10 @@
  * intraday PnL Tracker).
  */
 import { Loader2, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { PnlHistoryClosedTrade, PnlHistoryDailyRow } from '@/api/trading'
 import { tradingApi } from '@/api/trading'
-import type { Segment } from '@/types/trading'
+import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -35,6 +35,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import type { Segment } from '@/types/trading'
 import { showToast } from '@/utils/toast'
 
 function defaultStartDate(): string {
@@ -45,6 +46,16 @@ function defaultStartDate(): string {
 
 function defaultEndDate(): string {
   return new Date().toISOString().split('T')[0]
+}
+
+// Green/red-by-realized-P&L, matching Zerodha Console's own P&L heat map:
+// lighter shades for smaller swings, darker for larger ones, gray for a
+// day with closed trades that netted exactly zero.
+function pnlHeatColor(value: number, maxAbs: number): string {
+  if (value === 0) return 'rgba(148, 163, 184, 0.3)'
+  const intensity = Math.min(Math.abs(value) / maxAbs, 1)
+  const alpha = 0.15 + intensity * 0.75
+  return value > 0 ? `rgba(34, 197, 94, ${alpha})` : `rgba(239, 68, 68, ${alpha})`
 }
 
 export default function PnlHistory() {
@@ -97,6 +108,16 @@ export default function PnlHistory() {
 
   const pnlColorClass = totalRealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'
 
+  const heatmapDays: CalendarHeatmapDay[] = useMemo(
+    () =>
+      daily.map((row) => ({
+        date: row.date,
+        value: row.realized_pnl,
+        tooltip: `${row.date}: ${formatCurrency(row.realized_pnl)} (${row.trade_count} trade${row.trade_count === 1 ? '' : 's'})`,
+      })),
+    [daily, formatCurrency]
+  )
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -104,8 +125,7 @@ export default function PnlHistory() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">P&L History</h1>
           <p className="text-muted-foreground">
-            Realized profit and loss across a date range, backfilled from your daily trade
-            history
+            Realized profit and loss across a date range, backfilled from your daily trade history
           </p>
         </div>
       </div>
@@ -204,6 +224,57 @@ export default function PnlHistory() {
               </CardHeader>
             </Card>
           </div>
+
+          {/* Heat Map, matching Zerodha Console's own P&L report - a
+              calendar grid colored green/red by that day's realized P&L,
+              shade intensity scaled to magnitude. Always visible (not part
+              of the Day-wise/Trade-wise toggle below), since it's a single
+              at-a-glance summary rather than a third detail view. */}
+          {heatmapDays.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Heat Map</CardTitle>
+                <CardDescription>
+                  Daily realized P&L - darker means a larger profit or loss. Hover a day for
+                  details.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto pb-2">
+                  <CalendarHeatmap
+                    days={heatmapDays}
+                    startDate={startDate}
+                    endDate={endDate}
+                    colorFor={pnlHeatColor}
+                  />
+                </div>
+                <div className="flex items-center gap-2 mt-4 text-xs text-muted-foreground">
+                  <span>Loss</span>
+                  <span
+                    className="w-4 h-4 rounded-sm"
+                    style={{ backgroundColor: 'rgba(239, 68, 68, 0.9)' }}
+                  />
+                  <span
+                    className="w-4 h-4 rounded-sm"
+                    style={{ backgroundColor: 'rgba(239, 68, 68, 0.3)' }}
+                  />
+                  <span
+                    className="w-4 h-4 rounded-sm"
+                    style={{ backgroundColor: 'rgba(148, 163, 184, 0.3)' }}
+                  />
+                  <span
+                    className="w-4 h-4 rounded-sm"
+                    style={{ backgroundColor: 'rgba(34, 197, 94, 0.3)' }}
+                  />
+                  <span
+                    className="w-4 h-4 rounded-sm"
+                    style={{ backgroundColor: 'rgba(34, 197, 94, 0.9)' }}
+                  />
+                  <span>Profit</span>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Day-wise / Trade-wise toggle, matching Zerodha Console's own
               P&L report - only one breakdown is shown at a time. */}

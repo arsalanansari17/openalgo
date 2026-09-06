@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
+import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -142,6 +143,30 @@ function formatTime(timestamp: string): string {
   })
 }
 
+// YYYY-MM-DD bucket key for a trade timestamp, for the heat map below. Most
+// timestamps are already ISO-prefixed (historical rows from the ledger);
+// non-ISO broker formats fall back through parseTimestamp then read the
+// calendar date in the browser's local timezone, matching how Time is
+// already displayed via toLocaleTimeString('en-IN', ...) elsewhere on this
+// page - not a new timezone assumption, just the existing one applied here
+// too.
+function dateKeyOf(timestamp: string): string {
+  const isoMatch = timestamp.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (isoMatch) return isoMatch[1]
+  const ms = parseTimestamp(timestamp)
+  if (!ms) return ''
+  return new Date(ms).toLocaleDateString('en-CA')
+}
+
+// Blue-by-trade-count, matching Zerodha Console's own Tradebook heat map:
+// lighter shades for fewer trades, darker for more.
+function tradeCountHeatColor(value: number, maxAbs: number): string {
+  if (value <= 0) return 'rgba(148, 163, 184, 0.12)'
+  const intensity = Math.min(value / maxAbs, 1)
+  const alpha = 0.2 + intensity * 0.7
+  return `rgba(59, 130, 246, ${alpha})`
+}
+
 export default function TradeBook() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
@@ -191,10 +216,7 @@ export default function TradeBook() {
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
       if (segment !== 'all' && segmentOf(trade) !== segment) return false
-      if (
-        symbolFilter &&
-        !trade.symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase())
-      )
+      if (symbolFilter && !trade.symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase()))
         return false
       return true
     })
@@ -216,6 +238,24 @@ export default function TradeBook() {
       return 0
     })
   }, [trades, filters, segment, symbolFilter, sortConfig])
+
+  // Heat map data, grouping the already-filtered trades by day. Scoped to
+  // whatever Segment/Symbol/date range is currently applied, same as
+  // Zerodha Console's own Tradebook heat map being scoped to its own
+  // segment + duration picker.
+  const tradeHeatmapDays: CalendarHeatmapDay[] = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const trade of sortedAndFilteredTrades) {
+      const key = dateKeyOf(trade.timestamp)
+      if (!key) continue
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return Array.from(counts.entries()).map(([date, count]) => ({
+      date,
+      value: count,
+      tooltip: `${date}: ${count} trade${count === 1 ? '' : 's'}`,
+    }))
+  }, [sortedAndFilteredTrades])
 
   const requestSort = (key: SortKey) => {
     setSortConfig((prev) => ({
@@ -716,6 +756,50 @@ export default function TradeBook() {
           </CardHeader>
         </Card>
       </div>
+
+      {/* Heat Map, matching Zerodha Console's own Tradebook heat map - a
+          calendar grid colored blue by that day's trade count, shade
+          intensity scaled to volume. */}
+      {tradeHeatmapDays.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Heat Map</CardTitle>
+            <CardDescription>
+              Trades per day - darker means more trades. Hover a day for details.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto pb-2">
+              <CalendarHeatmap
+                days={tradeHeatmapDays}
+                startDate={startDate}
+                endDate={endDate}
+                colorFor={tradeCountHeatColor}
+              />
+            </div>
+            <div className="flex items-center gap-2 mt-4 text-xs text-muted-foreground">
+              <span>Fewer</span>
+              <span
+                className="w-4 h-4 rounded-sm"
+                style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }}
+              />
+              <span
+                className="w-4 h-4 rounded-sm"
+                style={{ backgroundColor: 'rgba(59, 130, 246, 0.45)' }}
+              />
+              <span
+                className="w-4 h-4 rounded-sm"
+                style={{ backgroundColor: 'rgba(59, 130, 246, 0.7)' }}
+              />
+              <span
+                className="w-4 h-4 rounded-sm"
+                style={{ backgroundColor: 'rgba(59, 130, 246, 0.9)' }}
+              />
+              <span>More</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Trades Table */}
       <Card>
