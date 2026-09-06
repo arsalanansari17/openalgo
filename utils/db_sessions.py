@@ -46,6 +46,8 @@ SCOPED_SESSION_MODULES = [
     ("database.oauth_db", "db_session"),
     ("database.whatsapp_db", "db_session"),
     ("database.agent_db", "db_session"),
+    # Fork-only (SKYSHIELD_PATCHES.md) - consolidated multi-day P&L feature.
+    ("database.pnl_db", "db_session"),
 ]
 
 

@@ -1101,3 +1101,144 @@ to all of the above; corrected before landing.
   set, confirm `tradeid` appears in the API response, and specifically
   check iram's (acc2) Trade Book page for whether the missing-date symptom
   from `KNOWN_ISSUES.md` #2 is actually gone now.
+
+---
+
+## 2026-09-06 — Consolidated multi-day P&L (new fork-only subsystem)
+
+**Branch:** `feature/pnl-history` (off `upgrade-main-2026-09`).
+**Upstream issue/PR:** none, deliberately. Upstream permanently rejected an
+in-platform "Trade Journal"/persistent-P&L-history feature
+([marketcalls/openalgo#1683](https://github.com/marketcalls/openalgo/issues/1683)).
+This entire subsystem is fork-only operational tooling and will never be
+filed upstream.
+**Verified in production:** not yet - implemented and locally smoke-tested
+only; not deployed to any VM.
+**Design doc:** `docs/design/56-pnl-history/README.md` (full architecture,
+data model, and status).
+
+### What
+
+A Zerodha-Console-style consolidated, historical, multi-account realized
+P&L report. Storage/capture/computation live per-account inside each
+OpenAlgo instance (data locality across our 3 VMs, no shared space);
+AlgoMirror will be a thin aggregator calling each account's new
+`GET /api/v1/pnl/history`. Compute-on-read throughout - no realized-P&L
+value is ever persisted, only the raw fill ledger; FIFO-matched fresh on
+every request, same philosophy as the built-in intraday PnL Tracker.
+
+### New files (zero merge risk on future upstream syncs)
+
+`database/pnl_db.py`, `utils/pnl_fifo.py`, `services/pnl_capture_service.py`,
+`services/pnl_history_service.py`, `restx_api/pnl_history_schema.py`,
+`restx_api/pnl_history.py`, `docs/design/56-pnl-history/README.md`.
+
+### Touched existing files (small, additive, mirrors an existing repeated pattern in each)
+
+- `database/apscheduler_jobstore_db.py`: `PNL_JOBSTORE_TABLE` constant +
+  one entry in the serialized init-phase tuple (same shape as
+  `FLOW_JOBSTORE_TABLE`/`HISTORIFY_JOBSTORE_TABLE`).
+- `utils/db_sessions.py`: one line added to `SCOPED_SESSION_MODULES`.
+- `app.py`: one `db_init_functions` entry ("PnL DB"); one
+  `try/except: init_pnl_scheduler()` startup block, identical in shape to
+  the four that already exist back-to-back for Flow/Historify/strategy
+  schedulers.
+- `restx_api/__init__.py`: import + `add_namespace(pnl_history_ns,
+  path="/pnl")` - a second `Namespace` object sharing `pnl_symbols_ns`'s
+  existing `/pnl` path. Verified with a throwaway Flask app that this
+  produces `/api/v1/pnl/history`, `/api/v1/pnl/import`, and the pre-existing
+  `/api/v1/pnl/symbols` with no route collision.
+- `.sample.env`: documents `PNL_DATABASE_URL` default, alongside the other
+  five store URLs.
+- `frontend/src/api/trading.ts`: one new function, `importPnlHistoryCsv`,
+  alongside the existing `getTrades` etc.
+- `frontend/src/pages/TradeBook.tsx`: an "Upload" button + dialog next to
+  the existing "Export" button (user's explicit choice - "a simple upload
+  button in the tradebook page only" - over a dedicated page or API-only).
+  Type-checks (`tsc -b`) and lints (`biome`) clean; `npm run build` was run
+  once to confirm it compiles, then the `frontend/dist/` output was
+  reverted (a full Vite rebuild re-hashes ~124 unrelated chunk filenames,
+  which would have buried this review diff in noise) - **run
+  `npm run build` again immediately before the deploy commit**, since the
+  reverted dist/ does not yet contain this change.
+
+### Why this file/touch-point split
+
+Per `docs/design/18-database-structure` and `20-design-principles`: a new,
+indefinitely-growing, real-money persistence domain gets its own isolated
+store (mirrors `sandbox_db.py`'s reasoning), NullPool/session-teardown
+discipline is followed exactly, and background-service startup is explicit
+from `app.py` rather than lazy from request code. Given OpenAlgo's own sync
+method here is file-enumeration + wholesale-copy (not a git merge - unlike
+AlgoMirror's upstream sync), every touch to an existing file is a permanent,
+recurring cost on every future sync; the split above minimizes that surface
+to four small, low-churn, easily-reapplied edits and puts everything else in
+new files a sync can never silently destroy.
+
+### Key design decisions
+
+- **Dedup key** (`database/pnl_db.py::make_dedup_key`): prefers the
+  broker's own per-fill `tradeid` (now correctly emitted - see the
+  2026-09-06 tradebook fix above); falls back to a composite key with
+  numeric fields normalized to fixed-precision strings before hashing, so
+  `100` (capture, typed by the broker mapping) and `"100"` (CSV import,
+  typed by the CSV parser) hash identically instead of silently
+  double-counting the same fill.
+- **Capture job bypasses Analyzer/sandbox mode entirely**
+  (`services/pnl_capture_service.py::capture_today_trades` calls
+  `get_tradebook(auth_token=..., broker=...)`, never the `api_key=` path):
+  the `api_key=` path reroutes into simulated sandbox trades whenever
+  Analyzer mode is toggled on, which must never enter a real-money ledger.
+- **CSV column mapping is broker-agnostic and case/spacing-insensitive**
+  (`restx_api/pnl_history.py::_normalize_csv_row`), including combining a
+  split `Trade Date` + `Order Execution Time` pair into one timestamp - the
+  exact gap that originally motivated using the tradebook instead of
+  Zerodha's raw P&L CSV export in the first place.
+
+### Verification
+
+- `python -m py_compile` on every new/touched file - clean.
+- `utils/pnl_fifo.compute_realized_pnl` checked against a hand-computed
+  multi-lot, multi-day FIFO scenario (partial fills, a loss on the second
+  day) - matched exactly (₹1000 + ₹160 − ₹210 = ₹950).
+- `database/pnl_db.py`: schema creation on a throwaway SQLite file, a
+  round-trip insert, and `make_dedup_key` producing an identical key across
+  `int`/`float`/`str` quantity and price inputs.
+- `services/pnl_capture_service.py`: `PnlCaptureScheduler.init()` against a
+  throwaway `openalgo.db` - jobstore table created alongside Flow's and
+  Historify's, cron job registered with the correct 16:00 IST trigger.
+- `restx_api/__init__.py`: full blueprint registered on a throwaway Flask
+  app - confirmed `/api/v1/pnl/history`, `/api/v1/pnl/import`, and
+  `/api/v1/pnl/symbols` all resolve with no collision.
+- Full round trip: CSV rows (Zerodha-shaped headers, split date/time
+  columns) -> `_normalize_csv_row` -> `import_trades_csv` -> re-import of
+  the same rows is a no-op (dedup) -> `get_pnl_history` -> correct realized
+  P&L. This caught and fixed two real bugs before they shipped: a
+  leftover-variable `NameError` in `import_trades_csv`, and the CSV header
+  normalizer not handling space/hyphen-separated headers or a split
+  trade-date/execution-time column pair.
+- **Not verified**: against any real broker account or VM (none available -
+  fork-only feature built without a live market/VM to test against); the
+  CSV column-alias list against a real exported file from either broker
+  (Zerodha's shape is remembered from an earlier session, not re-checked
+  here; Kotak's has never been checked against a real file at all).
+
+### Next steps
+
+1. User review of the full diff before any commit (standing rule - nothing
+   in this entry has been committed yet).
+2. Click the actual Upload button against a running dev server with a real
+   CSV before deploying - it has been type-checked and built successfully,
+   but never clicked.
+3. Re-run `npm run build` immediately before the deploy commit (the current
+   working tree's `frontend/dist/` was deliberately reverted after
+   confirming it builds - see above - so it does not yet contain this
+   change).
+4. Deploy to acc1 first (per the existing acc1-then-acc2 deploy order),
+   during non-market hours, with explicit approval per the standing VM
+   market-hours rule.
+5. Verify one real daily capture run end-to-end on acc1, then acc2, then
+   acc3 (Kotak) - acc3 first exercises the Kotak CSV-import column mapping
+   for real.
+6. Build the AlgoMirror-side thin aggregator once at least one account's
+   `/api/v1/pnl/history` is confirmed live.

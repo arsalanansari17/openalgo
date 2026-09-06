@@ -39,6 +39,12 @@ logger = get_logger(__name__)
 #: init-phase creation and the runtime job store cannot drift apart.
 FLOW_JOBSTORE_TABLE = "flow_apscheduler_jobs"
 HISTORIFY_JOBSTORE_TABLE = "historify_apscheduler_jobs"
+#: Fork-only (SKYSHIELD_PATCHES.md) - daily P&L trade-capture job. Lives here,
+#: not in database/pnl_db.py, for the same reason as the two above: the job
+#: store is small scheduler infrastructure that belongs with the other job
+#: stores in openalgo.db, even though the feature's own trade data lives in
+#: its own isolated db/pnl.db.
+PNL_JOBSTORE_TABLE = "pnl_apscheduler_jobs"
 
 #: A lost write-lock race is transient, so it is retried rather than surfaced.
 #: Each attempt already waits out the 15s busy_timeout, making the total worst
@@ -120,7 +126,7 @@ def ensure_jobstore_tables_exist():
     failure is logged rather than raised -- the owning scheduler retries on its
     own init and reports the real error there.
     """
-    for tablename in (FLOW_JOBSTORE_TABLE, HISTORIFY_JOBSTORE_TABLE):
+    for tablename in (FLOW_JOBSTORE_TABLE, HISTORIFY_JOBSTORE_TABLE, PNL_JOBSTORE_TABLE):
         try:
             ensure_jobstore_table(tablename)
         except Exception:

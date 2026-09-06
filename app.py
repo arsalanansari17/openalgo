@@ -124,6 +124,9 @@ from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
+from database.pnl_db import (  # fork-only, see SKYSHIELD_PATCHES.md
+    init_db as ensure_pnl_tables_exists,
+)
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
@@ -761,6 +764,12 @@ def setup_environment(app):
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
                 ("Agent DB", ensure_agent_tables_exists),
+                # Fork-only (SKYSHIELD_PATCHES.md) - consolidated multi-day
+                # P&L feature. db/pnl.db is its own file, not openalgo.db, so
+                # this doesn't join the write-lock contention the comment
+                # below describes - created here anyway just to keep every
+                # store's table creation on the same boot-time schedule.
+                ("PnL DB", ensure_pnl_tables_exists),
                 # Created here, not left to APScheduler's own CREATE TABLE in
                 # scheduler.start(). That DDL would otherwise run further down
                 # this function, after db_ready releases the rest of the boot,
@@ -876,6 +885,16 @@ def setup_environment(app):
                 logger.debug("Historify scheduler initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
+
+            try:
+                # Fork-only (SKYSHIELD_PATCHES.md) - consolidated multi-day
+                # P&L feature's daily trade-capture job.
+                from services.pnl_capture_service import init_pnl_scheduler
+
+                init_pnl_scheduler()
+                logger.debug("PnL capture scheduler initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize PnL capture scheduler: {e}")
 
             try:
                 # Multi-leg options strategies with end-to-end risk management.

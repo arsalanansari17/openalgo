@@ -7,6 +7,7 @@ import {
   Settings2,
   TrendingDown,
   TrendingUp,
+  Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
@@ -22,6 +23,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -114,6 +116,11 @@ export default function TradeBook() {
     product: [],
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // P&L history CSV import (fork-only feature - SKYSHIELD_PATCHES.md)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [isImporting, setIsImporting] = useState(false)
 
   // Sort state - Default: most recent first
   const [sortConfig, setSortConfig] = useState<SortConfig>({
@@ -263,6 +270,43 @@ export default function TradeBook() {
     }
   }
 
+  // P&L history CSV import (fork-only feature, backfills the consolidated
+  // multi-day P&L ledger - see openalgo's SKYSHIELD_PATCHES.md). Distinct
+  // from exportToCSV above: this uploads a broker-exported tradebook CSV
+  // rather than downloading the currently-filtered view.
+  const importPnlHistory = async () => {
+    if (!apiKey) {
+      showToast.error('API key not available', 'system')
+      return
+    }
+    if (!importFile) {
+      showToast.warning('Please select a CSV file', 'system')
+      return
+    }
+
+    setIsImporting(true)
+    try {
+      const response = await tradingApi.importPnlHistoryCsv(apiKey, importFile)
+      if (response.status === 'success' && response.data) {
+        const { imported, skipped_duplicate, skipped_invalid } = response.data
+        showToast.success(
+          `Imported ${imported} trade(s)` +
+            (skipped_duplicate ? `, ${skipped_duplicate} already had them` : '') +
+            (skipped_invalid ? `, ${skipped_invalid} row(s) could not be read` : ''),
+          'clipboard'
+        )
+        setImportDialogOpen(false)
+        setImportFile(null)
+      } else {
+        showToast.error(response.message || 'Failed to import CSV', 'system')
+      }
+    } catch {
+      showToast.error('Failed to import CSV', 'system')
+    } finally {
+      setIsImporting(false)
+    }
+  }
+
   const stats = {
     total: sortedAndFilteredTrades.length,
     buyTrades: sortedAndFilteredTrades.filter((t) => t.action === 'BUY').length,
@@ -392,6 +436,58 @@ export default function TradeBook() {
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
+
+          {/* P&L history CSV import (fork-only) */}
+          <Dialog
+            open={importDialogOpen}
+            onOpenChange={(open) => {
+              setImportDialogOpen(open)
+              if (!open) setImportFile(null)
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" aria-label="Import P&L history from CSV">
+                <Upload className="h-4 w-4 mr-2" />
+                Upload
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Import P&L History</DialogTitle>
+                <DialogDescription>
+                  Upload an exported tradebook CSV to backfill historical P&L for dates before
+                  automated capture started. Trades already recorded are skipped automatically.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="py-2">
+                <Label htmlFor="pnl-import-file">Tradebook CSV</Label>
+                <Input
+                  id="pnl-import-file"
+                  type="file"
+                  accept=".csv"
+                  className="mt-2"
+                  onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                />
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setImportDialogOpen(false)}
+                  disabled={isImporting}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={importPnlHistory} disabled={isImporting || !importFile}>
+                  {isImporting ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4 mr-2" />
+                  )}
+                  Upload
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 

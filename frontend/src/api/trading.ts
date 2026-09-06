@@ -181,6 +181,28 @@ export const tradingApi = {
   },
 
   /**
+   * Backfill the consolidated multi-day P&L ledger from an exported broker
+   * tradebook CSV. Fork-only endpoint - see openalgo's SKYSHIELD_PATCHES.md.
+   * A FormData body, not JSON: axios detects this and lets the browser set
+   * the multipart boundary itself rather than the apiClient's default
+   * application/json Content-Type.
+   */
+  importPnlHistoryCsv: async (
+    apiKey: string,
+    file: File
+  ): Promise<
+    ApiResponse<{ imported: number; skipped_duplicate: number; skipped_invalid: number }>
+  > => {
+    const formData = new FormData()
+    formData.append('apikey', apiKey)
+    formData.append('file', file)
+    const response = await apiClient.post<
+      ApiResponse<{ imported: number; skipped_duplicate: number; skipped_invalid: number }>
+    >('/pnl/import', formData)
+    return response.data
+  },
+
+  /**
    * Get holdings
    */
   getHoldings: async (
