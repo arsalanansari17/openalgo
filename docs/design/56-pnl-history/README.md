@@ -133,6 +133,41 @@ a real exported file in this change, and Kotak's export format has never
 been checked against a real file at all. Confirm against a real CSV from
 each broker before relying on this for anything but Zerodha.
 
+## Navigation and the P&L History page
+
+Deployed once with only the CSV Upload button on Trade Book (no dedicated
+report page). User feedback after seeing it live: a new **Reports**
+dropdown in the main navbar, next to Tools, modeled directly on Zerodha
+Console's own Reports menu - Tradebook and P&L as its two options for now
+("later we will see how we expand it").
+
+- `frontend/src/config/navigation.ts`: `NavItem` gained an optional
+  `children` field. Tradebook moved out of its own top-level `navItems`
+  slot into a new `Reports` group's children, alongside a new `P&L` entry
+  (`/pnl-history`). `navItems` stays at its existing length of 9 - the
+  removal and the addition cancel out - so the existing
+  `navigation.test.ts` length/ordering assertions needed no changes, only
+  additions.
+- `frontend/src/components/layout/Navbar.tsx`: the desktop nav's render
+  loop special-cases `item.children` to open a `DropdownMenu` (the same
+  component already used for the profile menu) instead of navigating
+  directly; the trigger highlights active when the current route matches
+  any child, not just the group's own placeholder href.
+- Mobile has no nested-dropdown affordance in its "more" sheet - a group
+  would 404 if linked to directly. `mobileSheetItems` now flattens a
+  group's `children` into the sheet instead of showing the group itself
+  (Tradebook still excluded there, same as before, since it already has a
+  bottom-bar slot; P&L has no bottom-bar slot so the sheet is its only
+  mobile entry point).
+- `frontend/src/pages/PnlHistory.tsx` (new): date range in, `GET
+  /api/v1/pnl/history` out - summary cards (total realized P&L, closed
+  trade count), a daily breakdown table, and a per-lot closed-trades table.
+  Nothing precomputed or cached client-side; every "Fetch" click re-runs
+  the FIFO match server-side. Registered at `/pnl-history` in `App.tsx`.
+- `frontend/src/api/trading.ts`: `getPnlHistory`, plus TypeScript
+  interfaces mirroring `services/pnl_history_service.py::get_pnl_history`'s
+  response shape exactly.
+
 ## Import UI
 
 An "Upload" button sits next to the existing "Export" button on the Trade
@@ -154,14 +189,19 @@ page only" over a full dedicated import page or a bare API-only endpoint.
 
 ## Status (as of 2026-09-06)
 
-Implemented and locally smoke-tested (FIFO math against a hand-computed
-scenario, schema creation, dedup-key normalization across types, scheduler
-job registration, REST route registration, and a full CSV-import ->
-FIFO-read round trip). The frontend Upload button type-checks clean
-(`tsc -b`) and lints clean (`biome`); a full `npm run build` was run to
-confirm the bundle compiles, then reverted from the working tree since a
-full Vite rebuild re-hashes ~124 unrelated chunk filenames and would have
-buried the real review diff - `npm run build` needs to be re-run once,
-right before the actual deploy commit. **Not yet deployed to any VM, not
-yet verified against a real broker account or a real exported CSV, and the
-Upload button has not been clicked against a running dev server.**
+**Deployed and live on acc1.** Backend + Upload button deployed first;
+verified on the running service: `db/pnl.db` created with both tables,
+`pnl_apscheduler_jobs` has the daily-capture job registered, no errors in
+`journalctl`, and the served `TradeBook-*.js` bundle contains the new
+import strings. The Reports dropdown + P&L History page (this section's
+own subject) is a same-day follow-up built after seeing the first deploy
+live - type-checks, lints, and unit tests (`navigation.test.ts`,
+`Navbar.test.tsx`, `MobileBottomNav.test.tsx`) all pass, `npm run build`
+confirmed compiling, ready for the same deploy procedure.
+
+**Still unverified**: no real trade has been captured or imported yet on
+any account (Sunday, markets closed - deployed ahead of Monday's live
+verification, by explicit user decision); the CSV column-alias mapper
+against a real exported file from either broker; the Upload button and the
+new P&L History page have not been clicked in a live browser session, only
+built and type/lint/unit-tested.

@@ -36,6 +36,16 @@ describe('Navigation Config', () => {
         expect(item.label.length).toBeGreaterThan(0)
       })
     })
+
+    // Fork-only (SKYSHIELD_PATCHES.md): Reports is a dropdown, not a direct
+    // link - Tradebook moved out of its own top-level slot and into here
+    // alongside the new P&L report.
+    it('groups Tradebook and P&L under a Reports dropdown', () => {
+      const reports = navItems.find((item) => item.label === 'Reports')
+      expect(reports).toBeDefined()
+      expect(reports?.children?.map((child) => child.label)).toEqual(['Tradebook', 'P&L'])
+      expect(navItems.some((item) => item.label === 'Tradebook')).toBe(false)
+    })
   })
 
   describe('bottomNavItems', () => {
@@ -64,6 +74,16 @@ describe('Navigation Config', () => {
       expect(sheetLabels).toContain('Trading')
       expect(sheetLabels).toContain('Platforms')
       expect(sheetLabels).toContain('Logs')
+    })
+
+    it('flattens the Reports group into its children instead of showing the group itself', () => {
+      const sheetLabels = mobileSheetItems.map((item) => item.label)
+      // Tradebook is already reachable via the bottom bar, so it's excluded
+      // here same as before the Reports grouping existed. P&L is new and
+      // has no bottom-bar slot, so the sheet is its only mobile entry point.
+      expect(sheetLabels).not.toContain('Reports')
+      expect(sheetLabels).not.toContain('Tradebook')
+      expect(sheetLabels).toContain('P&L')
     })
   })
 

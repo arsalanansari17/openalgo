@@ -1223,22 +1223,50 @@ new files a sync can never silently destroy.
   (Zerodha's shape is remembered from an earlier session, not re-checked
   here; Kotak's has never been checked against a real file at all).
 
+### Update 2026-09-06 (same day): deployed to acc1, then a nav follow-up
+
+Deployed to acc1 (commits `d4fdf061b` feature + `cfe5cbfe2` dist rebuild,
+fast-forwarded onto `upgrade-main-2026-09` and pushed to `fork`). VM was
+`TERMINATED` (off-hours, Sunday 04:xx IST) - started via `gcloud compute
+instances start`, confirmed clean `git status` and no local drift before
+fast-forwarding its checkout. Full procedure per
+`reference_openalgo_upgrade_skill`/`project_openalgo_versions` memory:
+fetch+checkout, `uv pip install` (149 packages, no new deps needed), 28/28
+migrations passed, `chown www-data`, service restart - clean, no errors.
+Verified live: `db/pnl.db` created with both tables, `pnl_apscheduler_jobs`
+has 1 registered job (the daily capture cron), served `TradeBook-*.js`
+bundle contains the new import strings.
+
+After seeing it live, user asked for two more things, both now built and
+locally verified (typecheck/lint/unit tests/build, not yet deployed):
+
+1. A **Reports** dropdown in the main navbar (next to Tools), mirroring
+   Zerodha Console's own Reports menu - Tradebook and P&L as its two
+   options. See `docs/design/56-pnl-history/README.md`'s new "Navigation
+   and the P&L History page" section for the full breakdown
+   (`navigation.ts`'s new `children` field, `Navbar.tsx`'s dropdown
+   rendering, the mobile-sheet flattening fix, and why `navItems`' length-9
+   test needed no changes).
+2. `frontend/src/pages/PnlHistory.tsx` (new): the actual P&L History report
+   page this whole feature was building toward - date range in, `GET
+   /api/v1/pnl/history` out, summary cards + daily table + closed-trades
+   table.
+
 ### Next steps
 
-1. User review of the full diff before any commit (standing rule - nothing
-   in this entry has been committed yet).
-2. Click the actual Upload button against a running dev server with a real
-   CSV before deploying - it has been type-checked and built successfully,
-   but never clicked.
-3. Re-run `npm run build` immediately before the deploy commit (the current
-   working tree's `frontend/dist/` was deliberately reverted after
-   confirming it builds - see above - so it does not yet contain this
-   change).
-4. Deploy to acc1 first (per the existing acc1-then-acc2 deploy order),
-   during non-market hours, with explicit approval per the standing VM
-   market-hours rule.
+1. User review of this follow-up's diff before committing it (standing
+   rule).
+2. Click-test both the Upload button and the new Reports dropdown / P&L
+   History page in a live browser session - built, type-checked, linted,
+   and unit-tested, but never clicked end-to-end in a browser.
+3. Re-run `npm run build` immediately before this follow-up's deploy commit
+   (reverted from the working tree after confirming it builds, same reason
+   as the first deploy - a full Vite rebuild's ~124 unrelated chunk-hash
+   renames would bury the real diff).
+4. Deploy this follow-up to acc1 the same way as the first round.
 5. Verify one real daily capture run end-to-end on acc1, then acc2, then
    acc3 (Kotak) - acc3 first exercises the Kotak CSV-import column mapping
-   for real.
+   for real. Monday market open, by explicit user decision (Sunday deploy,
+   fix-if-needed live rather than delaying further).
 6. Build the AlgoMirror-side thin aggregator once at least one account's
    `/api/v1/pnl/history` is confirmed live.

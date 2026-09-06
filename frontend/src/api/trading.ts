@@ -29,6 +29,49 @@ export interface DepthLevel {
   quantity: number
 }
 
+/**
+ * Response shape of GET /pnl/history (fork-only feature, see
+ * openalgo's SKYSHIELD_PATCHES.md). Mirrors
+ * services/pnl_history_service.py::get_pnl_history's response exactly.
+ */
+export interface PnlHistoryDailyRow {
+  date: string
+  realized_pnl: number
+  trade_count: number
+}
+
+export interface PnlHistoryClosedTrade {
+  symbol: string
+  exchange: string
+  product: string | null
+  entry_action: string
+  quantity: number
+  entry_price: number
+  entry_timestamp: string
+  exit_price: number
+  exit_timestamp: string
+  realized_pnl: number
+}
+
+export interface PnlHistoryOpenPosition {
+  symbol: string
+  exchange: string
+  product: string | null
+  action: string
+  quantity: number
+  average_price: number
+}
+
+export interface PnlHistoryData {
+  start_date: string
+  end_date: string
+  total_realized_pnl: number
+  trade_count: number
+  daily: PnlHistoryDailyRow[]
+  closed_trades: PnlHistoryClosedTrade[]
+  open_positions: PnlHistoryOpenPosition[]
+}
+
 export interface DepthData {
   asks: DepthLevel[]
   bids: DepthLevel[]
@@ -199,6 +242,22 @@ export const tradingApi = {
     const response = await apiClient.post<
       ApiResponse<{ imported: number; skipped_duplicate: number; skipped_invalid: number }>
     >('/pnl/import', formData)
+    return response.data
+  },
+
+  /**
+   * Realized P&L for a date range, from the consolidated multi-day P&L
+   * ledger (fork-only feature - see openalgo's SKYSHIELD_PATCHES.md).
+   * FIFO-matched fresh on every call - nothing is precomputed server-side.
+   */
+  getPnlHistory: async (
+    apiKey: string,
+    startDate: string,
+    endDate: string
+  ): Promise<ApiResponse<PnlHistoryData>> => {
+    const response = await apiClient.get<ApiResponse<PnlHistoryData>>('/pnl/history', {
+      params: { apikey: apiKey, start_date: startDate, end_date: endDate },
+    })
     return response.data
   },
 

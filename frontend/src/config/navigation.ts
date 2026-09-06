@@ -19,6 +19,7 @@ import {
   type LucideIcon,
   MessageCircle,
   MessageSquare,
+  PieChart,
   Search,
   Settings,
   TrendingUp,
@@ -34,19 +35,40 @@ export interface NavItem {
   icon: LucideIcon
   /** Served by Flask (not a React route): render as a full-page link. */
   external?: boolean
+  /**
+   * Sub-items shown in a dropdown instead of navigating directly on click
+   * (fork-only "Reports" grouping - see openalgo's SKYSHIELD_PATCHES.md).
+   * `href` is still required above even when `children` is set, so every
+   * item keeps a single consistent shape for isActiveRoute/tests - it is
+   * simply never rendered as a direct link when children are present.
+   */
+  children?: NavItem[]
 }
 
 // Main navigation items shown in desktop navbar
 export const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/orderbook', label: 'Orderbook', icon: ClipboardList },
-  { href: '/tradebook', label: 'Tradebook', icon: FileText },
   { href: '/positions', label: 'Positions', icon: TrendingUp },
   { href: '/trading', label: 'Trading', icon: CandlestickChart },
   { href: '/platforms', label: 'Platforms', icon: Layers },
   { href: '/strategy', label: 'Strategies', icon: Boxes },
   { href: '/logs', label: 'Logs', icon: FileBarChart },
   { href: '/tools', label: 'Tools', icon: Wrench },
+  // Fork-only (SKYSHIELD_PATCHES.md): a dropdown grouping report-style
+  // pages, mirroring Zerodha Console's own "Reports" menu (Tradebook, P&L,
+  // ...). Tradebook moved here from its own top-level slot; P&L is the new
+  // consolidated multi-day P&L report. href is a placeholder - clicking the
+  // trigger opens the dropdown rather than navigating to /reports directly.
+  {
+    href: '/reports',
+    label: 'Reports',
+    icon: BarChart3,
+    children: [
+      { href: '/tradebook', label: 'Tradebook', icon: FileText },
+      { href: '/pnl-history', label: 'P&L', icon: PieChart },
+    ],
+  },
 ]
 
 // Items shown in mobile bottom navigation
@@ -60,8 +82,14 @@ export const bottomNavItems: NavItem[] = [
 // Paths in bottom nav (for filtering mobile sheet items)
 const bottomNavPaths = bottomNavItems.map((item) => item.href)
 
-// Secondary items for mobile sheet (items not in bottom nav)
-export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includes(item.href))
+// Secondary items for mobile sheet (items not in bottom nav). A group with
+// children (e.g. Reports) is flattened into its children rather than shown
+// as its own entry - the mobile sheet renders every row as a direct link,
+// with no nested-dropdown affordance like the desktop navbar has, so
+// linking to a group's own placeholder href would 404.
+export const mobileSheetItems: NavItem[] = navItems
+  .flatMap((item) => item.children ?? [item])
+  .filter((item) => !bottomNavPaths.includes(item.href))
 
 // Profile dropdown menu items
 export const profileMenuItems: NavItem[] = [

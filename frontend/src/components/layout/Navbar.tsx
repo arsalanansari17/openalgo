@@ -212,6 +212,42 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
             the profile menu off-screen; full labels from xl up (issue #1384). */}
         <nav className="hidden md:flex items-center gap-1">
           {navItems.map((item) => {
+            // Fork-only (SKYSHIELD_PATCHES.md): a group (e.g. Reports) opens
+            // a dropdown of its children instead of navigating directly -
+            // active state highlights the trigger when the current route is
+            // any of its children, not just its own placeholder href.
+            if (item.children) {
+              const groupActive = item.children.some((child) => isActive(child.href))
+              const triggerClassName = cn(
+                'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                groupActive
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              )
+              return (
+                <DropdownMenu key={item.href}>
+                  <DropdownMenuTrigger asChild>
+                    <button type="button" title={item.label} className={triggerClassName}>
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      <span className="hidden xl:inline">{item.label}</span>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {item.children.map((child) => (
+                      <DropdownMenuItem
+                        key={child.href}
+                        onSelect={() => navigate(child.href)}
+                        className="cursor-pointer"
+                      >
+                        <child.icon className="h-4 w-4 mr-2" />
+                        {child.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )
+            }
+
             const active = isActive(item.href)
             const className = cn(
               'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
