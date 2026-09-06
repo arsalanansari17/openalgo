@@ -227,9 +227,17 @@ export const tradingApi = {
   /**
    * Backfill the consolidated multi-day P&L ledger from an exported broker
    * tradebook CSV. Fork-only endpoint - see openalgo's SKYSHIELD_PATCHES.md.
-   * A FormData body, not JSON: axios detects this and lets the browser set
-   * the multipart boundary itself rather than the apiClient's default
-   * application/json Content-Type.
+   *
+   * A FormData body, not JSON. apiClient sets a default `Content-Type:
+   * application/json` header on the axios instance - that default headers
+   * object is already populated before axios's FormData detection runs, so
+   * it is NOT auto-cleared the way it would be with no default header at
+   * all. Confirmed live: without the override below, Flask never saw a
+   * multipart body at all (request.form came back empty), so the `apikey`
+   * schema check failed first with "Missing data for required field" -
+   * nothing to do with the CSV itself. Setting Content-Type to `undefined`
+   * on this one call clears the instance default so the browser can set
+   * its own multipart boundary.
    */
   importPnlHistoryCsv: async (
     apiKey: string,
@@ -242,7 +250,9 @@ export const tradingApi = {
     formData.append('file', file)
     const response = await apiClient.post<
       ApiResponse<{ imported: number; skipped_duplicate: number; skipped_invalid: number }>
-    >('/pnl/import', formData)
+    >('/pnl/import', formData, {
+      headers: { 'Content-Type': undefined },
+    })
     return response.data
   },
 

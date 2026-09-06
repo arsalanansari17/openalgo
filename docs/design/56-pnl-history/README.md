@@ -175,6 +175,40 @@ a real exported file in this change, and Kotak's export format has never
 been checked against a real file at all. Confirm against a real CSV from
 each broker before relying on this for anything but Zerodha.
 
+### Real bug found on first real upload: multipart Content-Type
+
+First actual click-test (a real Zerodha tradebook CSV, ~1300 rows) failed
+with a generic "Failed to import CSV" toast. `nginx`'s access log showed
+the real signal: `POST /api/v1/pnl/import` -> **400, 77 bytes** - reproduced
+locally as the exact byte count of Marshmallow's
+`{"apikey": ["Missing data for required field."]}`. The `apikey` field
+never reached Flask at all.
+
+Root cause, confirmed by reading `node_modules/axios/lib/defaults/index.js`
+and `AxiosHeaders.js` directly rather than trusting the original comment's
+assumption: `api/trading.ts`'s `apiClient` axios instance sets a default
+`Content-Type: application/json` header. Axios's own `transformRequest`
+checks `headers.getContentType()` *before* deciding whether to pass a
+`FormData` body through untouched - since that default header was already
+`application/json`, axios took the `hasJSONContentType` branch and
+`JSON.stringify`'d the FormData instead of sending it as multipart. Flask
+never saw a multipart body, so `request.form` was empty and the `apikey`
+schema check failed first, before the file-presence check ever ran.
+
+Fix: `importPnlHistoryCsv` now passes `headers: { 'Content-Type': undefined }`
+in the per-request config. Verified via `AxiosHeaders.js`'s own merge
+logic that an explicit `undefined` (not the literal string "undefined")
+correctly clears the instance default - only a literal `false` blocks an
+overwrite - so `getContentType()` returns falsy and `transformRequest`
+passes the `FormData` through unmodified, letting the browser's XHR
+adapter set its own `multipart/form-data; boundary=...` header.
+
+Also hardened error surfacing while investigating: `TradeBook.tsx`'s
+import handler previously showed a hardcoded "Failed to import CSV" on
+any thrown error, discarding the real message the backend had already
+sent back in the response body. Now matches the pattern already used in
+`ActionCenter.tsx` - reads `error.response.data.message` when present.
+
 ## Navigation and the P&L History page
 
 Deployed once with only the CSV Upload button on Trade Book (no dedicated

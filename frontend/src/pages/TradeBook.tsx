@@ -361,8 +361,12 @@ export default function TradeBook() {
       } else {
         showToast.error(response.message || 'Failed to import CSV', 'system')
       }
-    } catch {
-      showToast.error('Failed to import CSV', 'system')
+    } catch (error: unknown) {
+      // Matching the pattern already used elsewhere (e.g. ActionCenter.tsx):
+      // a non-2xx response still carries our own {status, message} JSON
+      // body, so show that instead of a generic string when it's there.
+      const err = error as { response?: { data?: { message?: string } } }
+      showToast.error(err.response?.data?.message || 'Failed to import CSV', 'system')
     } finally {
       setIsImporting(false)
     }

@@ -1296,29 +1296,54 @@ raw fill ledger, never a computed P&L value, so the old name was
 misleading. Full reasoning, the exchange->segment mapping, the migration
 approach, and the frontend Segment-type sharing all in
 `docs/design/56-pnl-history/README.md`'s "Segment and Symbol filters"
-subsection (rewritten, not just appended to). Built and locally verified
+subsection (rewritten, not just appended to). Built, locally verified
 (migration tested against a simulated pre-existing table - confirmed it
 adds the column and index correctly; `derive_segment` checked against
 every mapped exchange plus unmapped ones; a three-way equity/currency/
 commodity split test summing correctly; schema validation for all five
-values), **not yet deployed** as of this edit.
+values), and **deployed to acc1** (commits `2f6a019b5` feature +
+`4fe123a32` dist rebuild; the old empty `db/pnl.db` was removed after
+confirming 0 rows, `db/tradebook.db` confirmed created fresh with
+`segment` already in its schema).
+
+**Same-day follow-up #5 - first real click-test, first real bug**: user
+uploaded an actual ~1300-row Zerodha tradebook CSV export and got a
+generic "Failed to import CSV" toast. `nginx` access log showed
+`POST /api/v1/pnl/import` -> 400, 77 bytes - reproduced locally as
+Marshmallow's `{"apikey": ["Missing data for required field."]}` exactly.
+Root cause confirmed by reading axios's own source
+(`node_modules/axios/lib/defaults/index.js`,`AxiosHeaders.js`): the
+`apiClient` axios instance's default `Content-Type: application/json`
+header made `transformRequest` `JSON.stringify` the FormData body instead
+of passing it through as multipart - the original code comment's
+assumption ("axios detects this and lets the browser set the boundary")
+was wrong specifically because of that instance-level default. See
+`docs/design/56-pnl-history/README.md`'s "Real bug found on first real
+upload" subsection for the full trace. Fix: `headers: { 'Content-Type':
+undefined }` on that one call, verified against `AxiosHeaders.js`'s merge
+logic to actually clear the default (only a literal `false` blocks the
+overwrite). Also fixed `TradeBook.tsx`'s import error handler to surface
+the real backend message (matching the existing `ActionCenter.tsx`
+pattern) instead of a hardcoded string - this bug's own error message
+would have pointed straight at the real cause if that had been in place
+from the start. `tsc -b`/`biome`/`npm run build` all clean, **not yet
+deployed** as of this edit.
 
 ### Next steps
 
-1. User review of the segment/rename diff before committing it (standing
-   rule) - the three rounds above are already committed and deployed; this
-   is the next, still-pending piece.
-2. Click-test the Upload button, the Reports dropdown, the P&L History
+1. User review of this fix's diff before committing it (standing rule) -
+   the four rounds above are already committed and deployed; this is the
+   next, still-pending piece.
+2. Deploy this fix to acc1, then have the user retry the real CSV upload
+   that originally failed - this is the first genuine end-to-end click
+   test of the whole feature, not just another "type-checks and builds"
+   verification.
+3. Once upload succeeds, click-test the Reports dropdown, the P&L History
    page, all five Segment values in both filter rows, and Tradebook's
-   historical mode + Trade ID column, in a live browser session - all
-   built, type-checked/linted/tested, but none clicked end-to-end in a
-   browser yet.
-3. Re-run `npm run build` immediately before this round's deploy commit
+   historical mode + Trade ID column against the newly-imported real data.
+4. Re-run `npm run build` immediately before this round's deploy commit
    (reverted from the working tree after confirming it builds, same reason
    as every prior round).
-4. Deploy this round to acc1 the same way as the prior ones - watch the
-   migration log line ("Added pnl_trades.segment") in `journalctl` to
-   confirm it actually ran, since the column doesn't exist on acc1 yet.
 5. Verify one real daily capture run end-to-end on acc1, then acc2, then
    acc3 (Kotak) - acc3 first exercises the Kotak CSV-import column mapping
    for real, and is the only account with a real commodity/currency
