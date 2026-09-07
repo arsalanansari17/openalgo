@@ -97,8 +97,11 @@ function buildMonthGroups(endDate: string): MonthGroup[] {
   return groups
 }
 
-const CELL = 9
-const GAP = 2
+// Sized to match the Zerodha reference's visual weight (confirmed against
+// a real screenshot) - the first pass at 9px/2px read as too compact and
+// small next to it.
+const CELL = 16
+const GAP = 3
 
 export function CalendarHeatmap({ days, startDate, endDate, colorFor }: CalendarHeatmapProps) {
   const dayMap = useMemo(() => new Map(days.map((d) => [d.date, d])), [days])
