@@ -26,10 +26,21 @@ from flask_restx import Namespace, Resource
 from marshmallow import ValidationError
 
 from limiter import limiter
-from services.pnl_history_service import get_pnl_history, get_pnl_trades, import_trades_csv
+from services.pnl_history_service import (
+    get_pnl_history,
+    get_pnl_trades,
+    get_strategy_legs,
+    import_trades_csv,
+    set_trade_strategy,
+)
 from utils.logging import get_logger
 
-from .pnl_history_schema import PnlHistorySchema, PnlImportSchema
+from .pnl_history_schema import (
+    PnlHistorySchema,
+    PnlImportSchema,
+    PnlSetTradeStrategySchema,
+    PnlStrategyLegsSchema,
+)
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 
@@ -42,6 +53,8 @@ logger = get_logger(__name__)
 
 pnl_history_schema = PnlHistorySchema()
 pnl_import_schema = PnlImportSchema()
+pnl_strategy_legs_schema = PnlStrategyLegsSchema()
+pnl_set_trade_strategy_schema = PnlSetTradeStrategySchema()
 
 # Column-name aliases across broker tradebook CSV exports. Modeled on
 # Zerodha's own tradebook export columns from memory of a real sample seen
@@ -129,6 +142,7 @@ class PnlHistory(Resource):
                 end_date=params["end_date"],
                 symbol=params.get("symbol"),
                 segment=params.get("segment"),
+                strategy=params.get("strategy"),
             )
             return make_response(jsonify(response_data), status_code)
         except ValidationError as err:
@@ -153,6 +167,7 @@ class PnlTrades(Resource):
                 end_date=params["end_date"],
                 symbol=params.get("symbol"),
                 segment=params.get("segment"),
+                strategy=params.get("strategy"),
             )
             return make_response(jsonify(response_data), status_code)
         except ValidationError as err:
@@ -196,6 +211,57 @@ class PnlImport(Resource):
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
             logger.exception(f"Unexpected error in pnl/import endpoint: {e}")
+            return make_response(
+                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
+            )
+
+
+@api.route("/strategy-legs", strict_slashes=False)
+class PnlStrategyLegs(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    def get(self):
+        """Every currently-tracked strategy leg for this account - a thin
+        read wrapper over the already-running strategy book
+        (database/strategy_book_db.py). See services/pnl_history_service.py
+        ::get_strategy_legs for why this isn't derived from pnl_trades.
+        """
+        try:
+            params = pnl_strategy_legs_schema.load(request.args.to_dict())
+            success, response_data, status_code = get_strategy_legs(
+                api_key=params["apikey"],
+                strategy=params.get("strategy"),
+            )
+            return make_response(jsonify(response_data), status_code)
+        except ValidationError as err:
+            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
+        except Exception as e:
+            logger.exception(f"Unexpected error in pnl/strategy-legs endpoint: {e}")
+            return make_response(
+                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
+            )
+
+
+@api.route("/trades/<int:trade_id>/strategy", strict_slashes=False)
+class PnlSetTradeStrategy(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    def patch(self, trade_id):
+        """Manual strategy-tag fallback for one historical trade row - see
+        services/pnl_history_service.py::set_trade_strategy. Covers
+        CSV-imported history and any trade with no orderid to
+        automatically join against the strategy book.
+        """
+        try:
+            data = pnl_set_trade_strategy_schema.load(request.json or {})
+            success, response_data, status_code = set_trade_strategy(
+                api_key=data["apikey"],
+                trade_id=trade_id,
+                strategy=data["strategy"],
+            )
+            return make_response(jsonify(response_data), status_code)
+        except ValidationError as err:
+            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
+        except Exception as e:
+            logger.exception(f"Unexpected error in pnl/trades/<id>/strategy endpoint: {e}")
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )

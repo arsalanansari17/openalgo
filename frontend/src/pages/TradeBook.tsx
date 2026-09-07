@@ -1,6 +1,7 @@
 import {
   ArrowDown,
   ArrowUp,
+  Check,
   Download,
   Loader2,
   RefreshCw,
@@ -8,6 +9,7 @@ import {
   TrendingDown,
   TrendingUp,
   Upload,
+  X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
@@ -198,6 +200,21 @@ export default function TradeBook() {
   // into the ledger until the 16:00 IST daily job runs.
   const [segment, setSegment] = useState<'all' | Segment>('all')
   const [symbolFilter, setSymbolFilter] = useState('')
+  // Strategy is only ever present on historical (GET /pnl/trades) rows -
+  // live-today rows have no way to carry it (see the Trade type's own
+  // comment), so filtering to one strategy naturally excludes every live
+  // row, same as Segment's own exchange-derived fallback simply not
+  // applying to strategy (there's no way to derive a strategy from
+  // exchange). Options come from the account's own strategy book
+  // (database/strategy_book_db.py, SKYSHIELD_PATCHES.md), same source and
+  // pattern as PnlHistory.tsx's Strategy filter.
+  const [strategyFilter, setStrategyFilter] = useState<'all' | string>('all')
+  const [strategyOptions, setStrategyOptions] = useState<string[]>([])
+  // Manual strategy-tag fallback (SKYSHIELD_PATCHES.md) - which historical
+  // row, if any, currently has its inline editor open.
+  const [editingTradeId, setEditingTradeId] = useState<number | null>(null)
+  const [editingValue, setEditingValue] = useState('')
+  const [isSavingTag, setIsSavingTag] = useState(false)
   const [startDate, setStartDate] = useState(sevenDaysAgoStr())
   const [endDate, setEndDate] = useState(todayStr())
   const isHistorical = startDate !== todayStr() || endDate !== todayStr()
@@ -216,6 +233,7 @@ export default function TradeBook() {
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
       if (segment !== 'all' && segmentOf(trade) !== segment) return false
+      if (strategyFilter !== 'all' && trade.strategy !== strategyFilter) return false
       if (symbolFilter && !trade.symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase()))
         return false
       return true
@@ -237,7 +255,7 @@ export default function TradeBook() {
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
       return 0
     })
-  }, [trades, filters, segment, symbolFilter, sortConfig])
+  }, [trades, filters, segment, strategyFilter, symbolFilter, sortConfig])
 
   // Heat map data, grouping the already-filtered trades by day. Scoped to
   // whatever Segment/Symbol/date range is currently applied, same as
@@ -324,6 +342,23 @@ export default function TradeBook() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - see comment above
   useEffect(() => {
     fetchTrades()
+  }, [apiKey])
+
+  // Populates the Strategy filter's options - same pattern as
+  // PnlHistory.tsx, fetched once rather than derived from whatever trades
+  // happen to be loaded right now.
+  useEffect(() => {
+    if (!apiKey) return
+    tradingApi
+      .getStrategyLegs(apiKey)
+      .then((response) => {
+        if (response.status === 'success' && response.data) {
+          setStrategyOptions(Array.from(new Set(response.data.map((leg) => leg.strategy))).sort())
+        }
+      })
+      .catch(() => {
+        // Best-effort - see the identical comment in PnlHistory.tsx.
+      })
   }, [apiKey])
 
   // Refresh on order events instead of polling
@@ -424,6 +459,38 @@ export default function TradeBook() {
       showToast.error(err.response?.data?.message || 'Failed to import CSV', 'system')
     } finally {
       setIsImporting(false)
+    }
+  }
+
+  // Manual strategy-tag fallback for one historical row (fork-only -
+  // SKYSHIELD_PATCHES.md) - for CSV-imported history and anything placed
+  // with no orderid to automatically join against the strategy book.
+  // Updates local state in place rather than a full refetch, since the
+  // PATCH already returns the saved value.
+  const saveTradeStrategy = async (trade: Trade) => {
+    if (!apiKey || trade.id === undefined) return
+    const value = editingValue.trim()
+    if (!value) {
+      showToast.warning('Strategy cannot be empty', 'system')
+      return
+    }
+
+    setIsSavingTag(true)
+    try {
+      const response = await tradingApi.setTradeStrategy(apiKey, trade.id, value)
+      if (response.status === 'success' && response.data) {
+        setTrades((prev) =>
+          prev.map((t) => (t.id === trade.id ? { ...t, strategy: response.data?.strategy } : t))
+        )
+        setEditingTradeId(null)
+        showToast.success(`Tagged as ${response.data.strategy}`, 'clipboard')
+      } else {
+        showToast.error(response.message || 'Failed to save strategy tag', 'system')
+      }
+    } catch {
+      showToast.error('Failed to save strategy tag', 'system')
+    } finally {
+      setIsSavingTag(false)
     }
   }
 
@@ -649,6 +716,22 @@ export default function TradeBook() {
               />
             </div>
             <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-strategy">Strategy</Label>
+              <Select value={strategyFilter} onValueChange={setStrategyFilter}>
+                <SelectTrigger id="tb-strategy">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {strategyOptions.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 space-y-1">
               <Label htmlFor="tb-start-date">Start date</Label>
               <Input
                 id="tb-start-date"
@@ -865,6 +948,7 @@ export default function TradeBook() {
                     <TableHead className="text-right">Trade Value</TableHead>
                     <TableHead>Order ID</TableHead>
                     <TableHead>Trade ID</TableHead>
+                    {isHistorical && <TableHead>Strategy</TableHead>}
                     <TableHead
                       onClick={() => requestSort('timestamp')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
@@ -915,6 +999,58 @@ export default function TradeBook() {
                       </TableCell>
                       <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
                       <TableCell className="font-mono text-xs">{trade.tradeid || '-'}</TableCell>
+                      {isHistorical && (
+                        <TableCell>
+                          {editingTradeId === trade.id ? (
+                            <div className="flex items-center gap-1">
+                              <Input
+                                autoFocus
+                                value={editingValue}
+                                onChange={(e) => setEditingValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') saveTradeStrategy(trade)
+                                  if (e.key === 'Escape') setEditingTradeId(null)
+                                }}
+                                className="h-7 w-32 text-xs"
+                                placeholder="Strategy name"
+                              />
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 w-7 p-0"
+                                disabled={isSavingTag}
+                                onClick={() => saveTradeStrategy(trade)}
+                                aria-label="Save strategy tag"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 w-7 p-0"
+                                onClick={() => setEditingTradeId(null)}
+                                aria-label="Cancel"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="text-xs text-left hover:underline"
+                              onClick={() => {
+                                setEditingTradeId(trade.id ?? null)
+                                setEditingValue(trade.strategy || '')
+                              }}
+                              aria-label={trade.strategy ? `Edit strategy tag` : 'Add strategy tag'}
+                            >
+                              {trade.strategy || (
+                                <span className="text-muted-foreground">+ Tag</span>
+                              )}
+                            </button>
+                          )}
+                        </TableCell>
+                      )}
                       <TableCell className="text-sm text-muted-foreground">
                         {isHistorical ? trade.timestamp : formatTime(trade.timestamp)}
                       </TableCell>

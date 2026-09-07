@@ -51,6 +51,18 @@ export interface Trade {
   // /tradebook endpoint has no concept of this, so TradeBook.tsx falls back
   // to deriving it client-side from exchange when this is absent.
   segment?: string
+  // pnl_trades.id - only present on rows from GET /api/v1/pnl/trades (the
+  // live /tradebook endpoint has no such row to address). Needed to target
+  // PATCH /api/v1/pnl/trades/<id>/strategy for the manual tag fallback.
+  id?: number
+  // Which strategy placed this trade - automatically populated at capture
+  // time from database.strategy_book_db's already-running orderid ->
+  // strategy tag (SKYSHIELD_PATCHES.md), or manually set via the PATCH
+  // above for trades with no orderid to join against (CSV-imported
+  // history, pre-existing rows). Only ever present on rows from GET
+  // /api/v1/pnl/trades - the live /tradebook endpoint has no concept of
+  // this either.
+  strategy?: string | null
 }
 
 export interface Holding {

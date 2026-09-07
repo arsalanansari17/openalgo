@@ -42,6 +42,7 @@ from database.pnl_db import (
     make_dedup_key,
     parse_trade_timestamp,
 )
+from database.strategy_book_db import get_order_tag
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -65,6 +66,21 @@ def _default_broker_exchanges():
     further.
     """
     return "NSE"
+
+
+def _lookup_strategy(orderid) -> str | None:
+    """Best-effort orderid -> strategy, via the strategy book's own
+    orderid -> strategy tag (database/strategy_book_db.py, a real, already-
+    running upstream feature - see database/pnl_db.py's PnlTrade.strategy
+    docstring for the full story). get_order_tag() already catches its own
+    exceptions and returns None on any failure, so a missing/expired tag
+    (30-day retention) just leaves strategy unset rather than failing the
+    capture run.
+    """
+    if not orderid:
+        return None
+    tag = get_order_tag(orderid)
+    return tag.strategy if tag else None
 
 
 def capture_today_trades(auth_token: str, broker: str) -> dict:
@@ -135,6 +151,7 @@ def capture_today_trades(auth_token: str, broker: str) -> dict:
                     exchange=trade.get("exchange"),
                     product=trade.get("product"),
                     segment=derive_segment(trade.get("exchange")),
+                    strategy=_lookup_strategy(trade.get("orderid")),
                     action=trade.get("action"),
                     quantity=float(trade.get("quantity") or 0),
                     average_price=float(trade.get("average_price") or 0),

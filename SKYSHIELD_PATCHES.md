@@ -1403,22 +1403,98 @@ trade count, and net realized P&L per scrip. Tab renamed "Trade-wise" ->
 "Scrip-wise"; the table's old per-lot Entry/Exit price columns were
 dropped in favor of Buy Value/Sell Value/Trades, since a single price
 stops being meaningful once multiple lots merge into one row. `tsc -b`/
-`biome`/`npm run build` all clean, **not yet deployed** as of this edit.
+`biome`/`npm run build` all clean, **deployed to acc1** (commits
+`5012436d6` fix + `cf16ab407` dist rebuild, verified via `git log` and a
+`grep -c` hit on the deployed `PnlHistory-*.js` bundle for "Scrip-wise").
+
+**Same-day follow-up #10 - strategy attribution, a correction turned into
+a same-day build**: user asked to discuss bringing this feature's tagging
+into AlgoMirror too. That discussion is the one documented at length in
+AlgoMirror's `KNOWN_ISSUES.md` item #8 - short version: OpenAlgo already
+has a real, already-running strategy book
+(`database/strategy_book_db.py` + `subscribers/strategy_book_subscriber.py`,
+built for Flow, but fed by the **generic** `order.placed`/`order.update`
+event-bus topics every order publishes) that tags every SkyShieldAT order
+by strategy automatically, right now - an earlier claim in this same
+conversation that the strategy name was discarded was wrong, caught and
+corrected before any code was written against it, then verified directly
+against a real account's `openalgo.db` (54 real `strategy_positions`
+rows, real strategy names, persisting across days). The actual gap was
+narrower: nothing exposed this data, and `PnlTrade` had no `strategy`
+column.
+
+Built the same day, "everything at once" per explicit user direction:
+- **`PnlTrade.strategy` column** (`database/pnl_db.py`, same migration
+  pattern as `segment`) - backfilled at capture time (and CSV import time)
+  by joining each fill's `orderid` against
+  `strategy_book_db.get_order_tag()` (already existed, previously only
+  called internally by the strategy book's own fill-booking code). Also a
+  third pre-filter alongside segment/symbol
+  (`_parse_range_and_build_query`) - applied to `PnlTrade` rows before
+  FIFO matching runs, so a strategy-filtered `get_pnl_history` response is
+  single-strategy by construction with zero changes to
+  `utils/pnl_fifo.py` itself.
+- **`GET /api/v1/pnl/strategy-legs`** (new) - thin read wrapper over
+  `strategy_book_db.get_strategy_legs()`. "Holdings, per strategy"
+  already computed server-side (quantity/average price/cumulative
+  realized P&L per leg) - not derived from `pnl_trades`/FIFO at all.
+- **`PATCH /api/v1/pnl/trades/<id>/strategy`** (new) - manual fallback for
+  CSV-imported history and anything placed with no `orderid` to
+  automatically join against (a manual buy placed directly in a broker's
+  own app, for instance). `PnlHistory.tsx` gained a Strategy filter +
+  a "Strategy Positions" table reading the new endpoint; `TradeBook.tsx`
+  gained a Strategy filter and a per-row inline tag editor on historical
+  rows, `id`/`strategy` added to both the `Trade` type and
+  `get_pnl_trades`'s response for the editor to address a specific row.
+- Verified: a real backend script (temp SQLite files for both
+  `tradebook.db` and `openalgo.db`, seeding a real `record_order_tag`/
+  `apply_fill` pair) confirms the migration, the capture-time lookup, the
+  strategy pre-filter, the manual tag endpoint, and `get_strategy_legs`
+  all work end-to-end against real writes/reads, not just against mocks.
+  `tsc -b`/`biome`/`npm run build` all clean. A full Flask app boot
+  couldn't be exercised locally (background schedulers block on live
+  broker network calls unavailable in this dev environment - same
+  limitation hit testing AlgoMirror's `create_app()` earlier), so route
+  wiring itself relies on matching the exact `@api.route`/`Resource`
+  pattern of three already-working sibling endpoints in the same file,
+  not a live HTTP round-trip. **Not yet deployed** as of this edit.
+- **Found while verifying against a real account, not a bug**:
+  `strategy_positions` already has a `'Holdings'` value (OpenAlgo's own
+  Holdings page hardcodes `strategy="Holdings"` on a manual Add/Exit
+  click, `frontend/src/pages/Holdings.tsx:1011`) and a real diverging
+  `DonchianSwing`/`CREDITACC` quantity (a manual top-up placed outside
+  OpenAlgo's own order flow - confirmed by the user, not a data bug).
+  Both are exactly the class of gap the "reconciliation, not replacement"
+  framing in AlgoMirror's `KNOWN_ISSUES.md` #8 exists for.
+- **AlgoMirror side, same round**: `ExtendedOpenAlgoAPI.strategy_legs()`/
+  `set_trade_strategy()`, `compute_combined_strategy_legs()` (merges legs
+  by strategy+symbol+exchange+product across accounts with weighted-
+  average cost - same merge shape as the existing Scrip-wise merge, keyed
+  by strategy too), two new routes
+  (`/trading/api/strategy-legs-combined`, `/trading/api/set-trade-strategy`),
+  a new "Strategy Positions" section on `pnl_history.html`, and a Strategy
+  filter + manual-tag column on `tradebook.html`. A real unit test
+  confirms two synthetic accounts' `DonchianSwing`/`INFY` legs merge into
+  one row with correctly weighted-averaged cost - the exact
+  same-symbol-two-accounts case originally discussed. Full detail in
+  AlgoMirror's own `KNOWN_ISSUES.md` item #8 and its git history.
 
 ### Next steps
 
 1. User review of this round's diff before committing it (standing rule) -
-   the eight rounds above are already committed and deployed; this is the
-   next, still-pending piece.
-2. Deploy this round to acc1 (VM currently stopped - start it first).
+   the nine rounds above are already committed and deployed; this is the
+   next, still-pending piece, on both repos.
+2. Deploy this round to acc1 (VM currently stopped - start it first) -
+   OpenAlgo backend/frontend and AlgoMirror both need the deploy.
 3. Have the user retry the real CSV upload that originally failed under
    the multipart bug - still the first genuine end-to-end click test of
    the whole feature, still unconfirmed as of this edit.
 4. Once upload succeeds, click-test the Reports dropdown, the P&L History
-   page (Day-wise/Scrip-wise toggle + its heat map), all five Segment
-   values in both filter rows, Tradebook's historical mode + Trade ID
-   column + its own heat map, the 7-day default, and the Fetch button,
-   against the newly-imported real data.
+   page (Day-wise/Scrip-wise toggle + its heat map + the new Strategy
+   filter/Strategy Positions table), all five Segment values in both
+   filter rows, Tradebook's historical mode + Trade ID column + its own
+   heat map + the new Strategy filter/manual tag editor, the 7-day
+   default, and the Fetch button, against the newly-imported real data.
 5. Re-run `npm run build` immediately before this round's deploy commit
    (reverted from the working tree after confirming it builds, same reason
    as every prior round).
@@ -1427,6 +1503,10 @@ stops being meaningful once multiple lots merge into one row. `tsc -b`/
    for real, and is the only account with a real commodity/currency
    segment likely to appear given Kotak's broader instrument access.
    Monday market open, by explicit user decision (Sunday deploy,
-   fix-if-needed live rather than delaying further).
-7. Build the AlgoMirror-side thin aggregator once at least one account's
-   `/api/v1/pnl/history` is confirmed live.
+   fix-if-needed live rather than delaying further). Also the first real
+   chance to confirm the strategy backfill picks up real fills as they're
+   captured, not just the synthetic seed data the verification script used.
+7. Confirm the deployed `PnlTrade.strategy` migration runs cleanly against
+   each account's already-populated `tradebook.db` (same
+   `_migrate_add_segment_column` pattern, but never yet run against a real
+   non-empty table on a live VM - only tested against a fresh temp DB).

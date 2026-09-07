@@ -32,8 +32,11 @@ Storage and computation live in *each* per-account OpenAlgo instance
 one instance aggregating all three accounts; putting the ledger there would
 recreate the "one space for everyone's data" problem this design
 deliberately avoids - each account's trade history lives with that
-account's own broker session, on that account's own VM. AlgoMirror's future
-role is a thin aggregator calling each account's `/api/v1/pnl/history`.
+account's own broker session, on that account's own VM. AlgoMirror is a
+thin aggregator calling each account's `/api/v1/pnl/history` (and, as of
+2026-09-07, `/pnl/trades`, `/pnl/strategy-legs`, and the manual-tag PATCH
+too) - built, not just planned; see AlgoMirror's own `KNOWN_ISSUES.md` for
+its side of the story.
 
 ## Architecture
 
@@ -104,6 +107,13 @@ from `exchange` on every read/filter. Nullable: a few exchange codes
 (index/quote symbols, crypto) don't map to any of the five and are left
 unset. See "Segment and Symbol filters" below for why this replaced an
 earlier query-time-only, two-value (`equity`/`fno`) version.
+
+`strategy` - which SkyShieldAT strategy placed this trade (or `"Holdings"`,
+OpenAlgo's own Holdings page placeholder for a manually-clicked order) -
+backfilled at write time by joining the row's `orderid` against
+`database.strategy_book_db`'s already-running orderid -> strategy tag (see
+"Strategy attribution" below). Nullable for the same reasons `segment` can
+be: CSV-imported history with no matching order, or a missing/expired tag.
 
 **`pnl_capture_runs`** - one row per attempted daily capture, so a silent
 failure (broker API down, auth expired) is a visible gap rather than
@@ -392,6 +402,84 @@ Each page supplies its own data and color scale:
 Both heat maps are pure client-side renders of data already being
 fetched for their page's table/breakdown - no new endpoint, no new
 request on render.
+
+### Strategy attribution
+
+Added 2026-09-07, following a discussion that started as "let's add
+strategy-wise P&L" and turned up something worth documenting carefully:
+an earlier claim in that same discussion (that SkyShieldAT's `strategy`
+field - required on every `placeorder` call - is submitted then discarded,
+never persisted) was **wrong**, caught and corrected before any code was
+written against the false premise.
+
+What was actually missed: OpenAlgo already has a real, already-running
+upstream feature called the **strategy book**
+(`database/strategy_book_db.py` + `subscribers/strategy_book_subscriber.py`,
+built for Flow's per-strategy risk management). Its subscriber listens to
+the **generic** event-bus topics `order.placed`/`order.update` (plus the
+batch-completion topics for basket/split/options orders) - topics
+`services/place_order_service.py::place_order_with_auth` publishes for
+every order, Flow or not, live or analyze - not a Flow-only hook. Verified
+directly against a real account's `openalgo.db`: 54 real
+`strategy_positions` rows, real strategy names (`DonchianSwing`,
+`IntradayIronFly`, `IronCondor`), persisting across days (`quantity`/
+`average_price`/cumulative `realized_pnl` carry forward; only
+`today_realized_pnl` resets on the first fill of a new trading date). So
+the capture problem was already solved - the actual gap was narrower:
+nothing exposed this data via a REST endpoint or UI, and `pnl_trades` had
+no `strategy` column to filter or group by.
+
+**What this feature adds on top of the already-running strategy book:**
+
+- `database.pnl_db.PnlTrade.strategy` (see Data model above) - backfilled
+  by `services/pnl_capture_service.py::_lookup_strategy` (and the
+  equivalent in the CSV import path), joining each fill's `orderid`
+  against `strategy_book_db.get_order_tag()` - a function that already
+  existed, previously only called internally by the strategy book's own
+  fill-booking code (`_apply_fill_locked`).
+- `strategy` as a third pre-filter alongside segment/symbol
+  (`_parse_range_and_build_query`) - applied to `PnlTrade` rows *before*
+  `get_pnl_history`'s FIFO matching ever runs, exactly like segment/symbol
+  already work. A strategy-filtered response's `closed_trades`/`daily`/
+  `scrip_rows` are single-strategy by construction, with zero changes
+  needed to `utils/pnl_fifo.py` itself - no ambiguity about which strategy
+  a closed lot (which can span two physical fills) belongs to, because
+  only that one strategy's fills were ever in the query.
+- `GET /api/v1/pnl/strategy-legs` (new) - a thin read wrapper over
+  `strategy_book_db.get_strategy_legs()`. This is "holdings, per
+  strategy" already computed server-side (current open quantity, average
+  price, cumulative realized P&L per leg) - genuinely not derived from
+  `pnl_trades`/the FIFO ledger at all, a different and more direct data
+  source for the same underlying question.
+- `PATCH /api/v1/pnl/trades/<id>/strategy` (new) - the manual fallback,
+  for CSV-imported history and any trade placed with no `orderid` to
+  automatically join against (a manual buy placed directly in a broker's
+  own app rather than through OpenAlgo, for instance).
+- `PnlHistory.tsx` gained a Strategy filter (dropdown, populated from this
+  account's own strategy book rather than a fixed enum like Segment) and
+  a "Strategy Positions" table reading `strategy-legs` directly -
+  independent of the date-range Fetch cycle, since strategy legs are
+  current state, not historical trades.
+- `TradeBook.tsx` gained a Strategy filter and a per-row inline tag editor
+  on historical rows (click the cell, type a name, Enter to save) - `id`
+  and `strategy` were added to both the `Trade` type and
+  `get_pnl_trades`'s response so the editor can address one specific row.
+
+**Found while verifying against a real account, not a bug in this
+feature**: `strategy_positions` already had a `'Holdings'` value from
+OpenAlgo's own Holdings page hardcoding `strategy="Holdings"` on any
+manual Add/Exit click (`frontend/src/pages/Holdings.tsx:1011`), and a
+real diverging `DonchianSwing`/`CREDITACC` quantity from a manual top-up
+the user placed outside OpenAlgo's own order flow (confirmed with the
+user - a real, expected divergence, not a data bug). Both are exactly the
+class of gap a future "holdings from tradebook, reconciled against the
+broker's own Holdings API rather than replacing it" feature would need to
+handle - discussed, not yet scoped or started.
+
+AlgoMirror's own strategy-attribution work (client methods, the
+cross-account merge, new routes, and the corresponding UI on both pages)
+is documented in AlgoMirror's own `KNOWN_ISSUES.md` item #8, not
+duplicated here.
 
 ## Import UI
 

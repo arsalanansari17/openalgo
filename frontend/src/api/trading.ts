@@ -73,6 +73,24 @@ export interface PnlHistoryData {
   open_positions: PnlHistoryOpenPosition[]
 }
 
+/**
+ * One tracked leg from database/strategy_book_db.py's already-running
+ * strategy book (SKYSHIELD_PATCHES.md) - "holdings, per strategy",
+ * already computed server-side, not derived from the pnl_trades ledger.
+ * Mirrors services/pnl_history_service.py::get_strategy_legs exactly.
+ */
+export interface StrategyLeg {
+  strategy: string
+  symbol: string
+  exchange: string
+  product: string
+  quantity: number
+  average_price: number
+  realized_pnl: number
+  today_realized_pnl: number
+  updated_at: string | null
+}
+
 export interface DepthData {
   asks: DepthLevel[]
   bids: DepthLevel[]
@@ -265,7 +283,7 @@ export const tradingApi = {
     apiKey: string,
     startDate: string,
     endDate: string,
-    options?: { symbol?: string; segment?: Segment }
+    options?: { symbol?: string; segment?: Segment; strategy?: string }
   ): Promise<ApiResponse<PnlHistoryData>> => {
     const response = await apiClient.get<ApiResponse<PnlHistoryData>>('/pnl/history', {
       params: {
@@ -277,6 +295,7 @@ export const tradingApi = {
         // field validates against a fixed OneOf and would reject "".
         symbol: options?.symbol || undefined,
         segment: options?.segment || undefined,
+        strategy: options?.strategy || undefined,
       },
     })
     return response.data
@@ -292,11 +311,55 @@ export const tradingApi = {
   getPnlTrades: async (
     apiKey: string,
     startDate: string,
-    endDate: string
+    endDate: string,
+    options?: { symbol?: string; segment?: Segment; strategy?: string }
   ): Promise<ApiResponse<Trade[]>> => {
     const response = await apiClient.get<ApiResponse<Trade[]>>('/pnl/trades', {
-      params: { apikey: apiKey, start_date: startDate, end_date: endDate },
+      params: {
+        apikey: apiKey,
+        start_date: startDate,
+        end_date: endDate,
+        symbol: options?.symbol || undefined,
+        segment: options?.segment || undefined,
+        strategy: options?.strategy || undefined,
+      },
     })
+    return response.data
+  },
+
+  /**
+   * Every currently-tracked strategy leg for this account - a thin read
+   * over the already-running strategy book (database/strategy_book_db.py,
+   * SKYSHIELD_PATCHES.md). Not date-ranged: this is current open legs
+   * (quantity/average_price/cumulative realized P&L), not historical
+   * trades.
+   */
+  getStrategyLegs: async (
+    apiKey: string,
+    strategy?: string
+  ): Promise<ApiResponse<StrategyLeg[]>> => {
+    const response = await apiClient.get<ApiResponse<StrategyLeg[]>>('/pnl/strategy-legs', {
+      params: { apikey: apiKey, strategy: strategy || undefined },
+    })
+    return response.data
+  },
+
+  /**
+   * Manual strategy-tag fallback for one historical trade row (fork-only -
+   * SKYSHIELD_PATCHES.md) - for CSV-imported history and any trade with no
+   * orderid to automatically join against the strategy book. `tradeId` is
+   * the row's pnl_trades.id (Trade.id), only present on rows returned by
+   * getPnlTrades above.
+   */
+  setTradeStrategy: async (
+    apiKey: string,
+    tradeId: number,
+    strategy: string
+  ): Promise<ApiResponse<{ id: number; strategy: string }>> => {
+    const response = await apiClient.patch<ApiResponse<{ id: number; strategy: string }>>(
+      `/pnl/trades/${tradeId}/strategy`,
+      { apikey: apiKey, strategy }
+    )
     return response.data
   },
 

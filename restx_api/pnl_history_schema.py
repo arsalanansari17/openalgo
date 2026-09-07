@@ -26,6 +26,12 @@ class PnlHistorySchema(Schema):
     segment = fields.Str(
         required=False, load_default=None, validate=validate.OneOf(list(VALID_SEGMENTS))
     )
+    # Free-text, unlike segment - strategy names come from
+    # database.strategy_book_db (SkyShieldAT's own strategy names plus
+    # OpenAlgo Holdings page's "Holdings" placeholder), an open-ended set
+    # with no fixed enum to validate against. Omitted/empty means no
+    # strategy filter.
+    strategy = fields.Str(required=False, load_default=None)
 
 
 class PnlImportSchema(Schema):
@@ -34,3 +40,13 @@ class PnlImportSchema(Schema):
     # it's read directly from request.files in the resource rather than
     # validated by this schema - Marshmallow here only covers the apikey
     # form field sent alongside it.
+
+
+class PnlStrategyLegsSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    strategy = fields.Str(required=False, load_default=None)
+
+
+class PnlSetTradeStrategySchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    strategy = fields.Str(required=True, validate=validate.Length(min=1, max=120))

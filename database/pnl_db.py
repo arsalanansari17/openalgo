@@ -238,6 +238,20 @@ class PnlTrade(Base):
     # five segments and are left unset rather than guessed.
     segment = Column(String(20), nullable=True, index=True)
 
+    # Which SkyShieldAT strategy (or "Holdings", OpenAlgo's own Holdings
+    # page placeholder for a manually-clicked order) placed this trade.
+    # Backfilled at write time by joining this row's orderid against
+    # database/strategy_book_db.py's StrategyOrderTag - a real, already-
+    # running upstream feature (built for Flow's per-strategy risk
+    # management) that tags orderid -> strategy the moment any order is
+    # placed via /api/v1/placeorder, strategy-module or not. Nullable:
+    # CSV-imported history predates OpenAlgo entirely for some rows (no
+    # orderid to join against), and the order-tag lookup itself is
+    # best-effort (a missing/expired tag - 30-day retention - just leaves
+    # this unset rather than failing the write). Also settable manually via
+    # PATCH /api/v1/pnl/trades/<id> for exactly those unattributed rows.
+    strategy = Column(String(120), nullable=True, index=True)
+
     quantity = Column(Float, nullable=False)
     average_price = Column(Float, nullable=False)
     trade_value = Column(Float, nullable=True)
@@ -288,6 +302,7 @@ def init_db():
     _ensure_sqlite_dir(engine)
     init_db_with_logging(Base, engine, "Tradebook DB", logger)
     _migrate_add_segment_column()
+    _migrate_add_strategy_column()
 
 
 def _migrate_add_segment_column():
@@ -315,3 +330,24 @@ def _migrate_add_segment_column():
             logger.info("Added pnl_trades.segment")
     except Exception:
         logger.exception("Could not add pnl_trades.segment")
+
+
+def _migrate_add_strategy_column():
+    """Add pnl_trades.strategy to a database created before it existed.
+    Same pattern as _migrate_add_segment_column().
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(pnl_trades)"))}
+            if not existing or "strategy" in existing:
+                return
+            conn.execute(text("ALTER TABLE pnl_trades ADD COLUMN strategy VARCHAR(120)"))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_pnl_trades_strategy ON pnl_trades(strategy)")
+            )
+            conn.commit()
+            logger.info("Added pnl_trades.strategy")
+    except Exception:
+        logger.exception("Could not add pnl_trades.strategy")

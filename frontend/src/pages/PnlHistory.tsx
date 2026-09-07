@@ -9,8 +9,8 @@
  * intraday PnL Tracker).
  */
 import { Loader2, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import { useMemo, useState } from 'react'
-import type { PnlHistoryClosedTrade, PnlHistoryDailyRow } from '@/api/trading'
+import { useEffect, useMemo, useState } from 'react'
+import type { PnlHistoryClosedTrade, PnlHistoryDailyRow, StrategyLeg } from '@/api/trading'
 import { tradingApi } from '@/api/trading'
 import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
 import { Button } from '@/components/ui/button'
@@ -75,6 +75,14 @@ export default function PnlHistory() {
 
   const [segment, setSegment] = useState<'all' | Segment>('all')
   const [symbol, setSymbol] = useState('')
+  // Strategy names are open-ended (SkyShieldAT's own strategies, plus
+  // OpenAlgo's Holdings-page "Holdings" placeholder - see
+  // SKYSHIELD_PATCHES.md), so the dropdown is populated dynamically from
+  // this account's own strategy book rather than a fixed enum like
+  // Segment.
+  const [strategy, setStrategy] = useState<'all' | string>('all')
+  const [strategyOptions, setStrategyOptions] = useState<string[]>([])
+  const [strategyLegs, setStrategyLegs] = useState<StrategyLeg[]>([])
   const [startDate, setStartDate] = useState(defaultStartDate())
   const [endDate, setEndDate] = useState(defaultEndDate())
   const [isLoading, setIsLoading] = useState(false)
@@ -100,6 +108,7 @@ export default function PnlHistory() {
       const response = await tradingApi.getPnlHistory(apiKey, startDate, endDate, {
         symbol: symbol.trim().toUpperCase(),
         segment: segment === 'all' ? undefined : segment,
+        strategy: strategy === 'all' ? undefined : strategy,
       })
       if (response.status === 'success' && response.data) {
         setTotalRealizedPnl(response.data.total_realized_pnl)
@@ -116,6 +125,27 @@ export default function PnlHistory() {
       setIsLoading(false)
     }
   }
+
+  // Populates the Strategy filter's options - fetched once on mount rather
+  // than re-derived from each report's own results, so the dropdown always
+  // shows every strategy this account has ever tracked, not just the ones
+  // present in whatever date range happens to be selected right now.
+  useEffect(() => {
+    if (!apiKey) return
+    tradingApi
+      .getStrategyLegs(apiKey)
+      .then((response) => {
+        if (response.status === 'success' && response.data) {
+          const names = Array.from(new Set(response.data.map((leg) => leg.strategy))).sort()
+          setStrategyOptions(names)
+          setStrategyLegs(response.data)
+        }
+      })
+      .catch(() => {
+        // Best-effort - the strategy book being unavailable shouldn't block
+        // the rest of the page; the filter just has no options to offer.
+      })
+  }, [apiKey])
 
   const pnlColorClass = totalRealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'
 
@@ -178,8 +208,70 @@ export default function PnlHistory() {
         </div>
       </div>
 
-      {/* Filters: Segment, Symbol, Date range - same order as Zerodha
-          Console's own Tradebook/P&L report filters. */}
+      {/* Strategy Positions - not date-ranged like everything below. Reads
+          straight from database/strategy_book_db.py's already-running
+          strategy book (SKYSHIELD_PATCHES.md): "holdings, per strategy",
+          already computed server-side, not derived from this page's own
+          ledger/FIFO matching at all. Filtered client-side to whichever
+          strategy is picked in the filter row below, for consistency with
+          the rest of the page. */}
+      {strategyLegs.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Strategy Positions</CardTitle>
+            <CardDescription>
+              Current open legs and cumulative realized P&L per strategy
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Strategy</TableHead>
+                    <TableHead>Symbol</TableHead>
+                    <TableHead>Exchange</TableHead>
+                    <TableHead>Product</TableHead>
+                    <TableHead className="text-right">Qty</TableHead>
+                    <TableHead className="text-right">Avg Price</TableHead>
+                    <TableHead className="text-right">Realized P&L</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {strategyLegs
+                    .filter((leg) => strategy === 'all' || leg.strategy === strategy)
+                    .map((leg) => (
+                      <TableRow
+                        key={`${leg.strategy}-${leg.symbol}-${leg.exchange}-${leg.product}`}
+                      >
+                        <TableCell>{leg.strategy}</TableCell>
+                        <TableCell>{leg.symbol}</TableCell>
+                        <TableCell>{leg.exchange}</TableCell>
+                        <TableCell>{leg.product}</TableCell>
+                        <TableCell className="text-right">{leg.quantity}</TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(leg.average_price)}
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            'text-right font-medium',
+                            leg.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                          )}
+                        >
+                          {formatCurrency(leg.realized_pnl)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Filters: Segment, Symbol, Strategy, Date range - same order as
+          Zerodha Console's own Tradebook/P&L report filters, Strategy
+          appended since it isn't part of that reference. */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row sm:items-end gap-4">
@@ -207,6 +299,22 @@ export default function PnlHistory() {
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value)}
               />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="pnl-strategy">Strategy</Label>
+              <Select value={strategy} onValueChange={setStrategy}>
+                <SelectTrigger id="pnl-strategy">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {strategyOptions.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex-1 space-y-1">
               <Label htmlFor="pnl-start-date">Start date</Label>
