@@ -27,20 +27,19 @@ function toUTCDateStr(year: number, month: number, day: number): string {
   return new Date(Date.UTC(year, month, day)).toISOString().split('T')[0]
 }
 
-function enumerateMonths(startDate: string, endDate: string): { year: number; month: number }[] {
-  const [sy, sm] = startDate.split('-').map(Number)
+// Always the trailing 12 months ending at endDate's month - matches
+// Zerodha Console's own heat map, which shows a full year of calendar
+// frame regardless of how narrow the actual searched/filtered range is.
+// startDate plays no part in the frame itself; MonthGrid's own inRange
+// check is what keeps days outside the real fetched range blank within
+// that wider 12-month frame.
+function enumerateMonths(endDate: string): { year: number; month: number }[] {
   const [ey, em] = endDate.split('-').map(Number)
-  const months: { year: number; month: number }[] = []
-  let y = sy
-  let m = sm - 1
   const endIdx = ey * 12 + (em - 1)
-  while (y * 12 + m <= endIdx) {
-    months.push({ year: y, month: m })
-    m += 1
-    if (m > 11) {
-      m = 0
-      y += 1
-    }
+  const startIdx = endIdx - 11
+  const months: { year: number; month: number }[] = []
+  for (let idx = startIdx; idx <= endIdx; idx++) {
+    months.push({ year: Math.floor(idx / 12), month: ((idx % 12) + 12) % 12 })
   }
   return months
 }
@@ -119,7 +118,7 @@ function MonthGrid({
 export function CalendarHeatmap({ days, startDate, endDate, colorFor }: CalendarHeatmapProps) {
   const dayMap = useMemo(() => new Map(days.map((d) => [d.date, d])), [days])
   const maxAbs = useMemo(() => Math.max(1, ...days.map((d) => Math.abs(d.value))), [days])
-  const months = useMemo(() => enumerateMonths(startDate, endDate), [startDate, endDate])
+  const months = useMemo(() => enumerateMonths(endDate), [endDate])
 
   return (
     <div className="flex flex-wrap gap-6">
