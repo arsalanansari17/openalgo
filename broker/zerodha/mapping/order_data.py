@@ -163,7 +163,30 @@ def transform_tradebook_data(tradebook_data):
             "average_price": trade.get("average_price", 0.0),
             "trade_value": trade.get("quantity", 0) * trade.get("average_price", 0.0),
             "orderid": trade.get("order_id", ""),
-            "timestamp": trade.get("order_timestamp", ""),
+            # Kite's own docs (kite.trade/docs/connect/v3/orders/) document
+            # three separate timestamps on a trade: order_timestamp ("when
+            # the order was registered by the API" - order-placement time,
+            # shared by every fill under one order), exchange_timestamp
+            # ("when the order was registered by the exchange"), and
+            # fill_timestamp ("when the trade was filled at the exchange") -
+            # the one actually correct for a TRADE record. order_timestamp
+            # was used here instead, which is very likely the root cause of
+            # a known bug (AlgoMirror KNOWN_ISSUES.md #2): one account's
+            # Trade Book rows showed time-only values with no date, while an
+            # identical code path on another account showed full datetimes -
+            # order_timestamp is the field genuinely liable to do that for a
+            # multi-fill order, since it's an order-level field being reused
+            # per fill.  "trade_id" is Kite's own per-fill identifier,
+            # previously dropped entirely - only "orderid" survived, shared
+            # by every fill under one order, giving no stable per-fill
+            # identity for a consumer to dedup repeated tradebook pulls
+            # against. Emitted under OpenAlgo's own established key
+            # "tradeid" (no underscore) - the documented tradebook contract
+            # (docs/prompt/flow-import-format.md) and existing consumers
+            # (services/telegram_bot_service*.py, broker/groww's own
+            # adapter) already expect that exact key.
+            "tradeid": trade.get("trade_id", ""),
+            "timestamp": trade.get("fill_timestamp") or trade.get("order_timestamp", ""),
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -249,8 +272,6 @@ def transform_holdings_data(holdings_data):
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": _to_int(holdings.get("quantity", 0)),
-            "t1_quantity": _to_int(holdings.get("t1_quantity", 0)),
-            "pledged_quantity": _to_int(holdings.get("collateral_quantity", 0)),
             "product": holdings.get("product", ""),
             "average_price": average_price,
             # Kite calls it last_price. It was already being read to derive
@@ -301,22 +322,12 @@ def calculate_portfolio_statistics(holdings_data):
     # anything, so it has to do its own coercing -- a single null last_price
     # or pnl used to fail the entire holdings request rather than one row.
     holdings_data = holdings_data or []
-
-    def _total_qty(item):
-        # Free + T1/unsettled + pledged-as-collateral -- a fully-pledged
-        # holding has free quantity 0, so leaving these out understates the
-        # position's actual value (see fix/holdings-pledge-t1-quantity).
-        return (
-            _to_int(item.get("quantity"))
-            + _to_int(item.get("t1_quantity"))
-            + _to_int(item.get("collateral_quantity"))
-        )
-
     totalholdingvalue = sum(
-        _to_float(item.get("last_price")) * _total_qty(item) for item in holdings_data
+        _to_float(item.get("last_price")) * _to_int(item.get("quantity")) for item in holdings_data
     )
     totalinvvalue = sum(
-        _to_float(item.get("average_price")) * _total_qty(item) for item in holdings_data
+        _to_float(item.get("average_price")) * _to_int(item.get("quantity"))
+        for item in holdings_data
     )
     totalprofitandloss = sum(_to_float(item.get("pnl")) for item in holdings_data)
 
