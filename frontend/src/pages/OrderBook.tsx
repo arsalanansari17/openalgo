@@ -103,18 +103,21 @@ function parseTimestamp(timestamp: string): number {
   return date.getTime() || 0
 }
 
-function formatTime(timestamp: string): string {
+// Full date+time, always - a time-only display read as "the date is
+// missing" rather than "this is always today," even on this live-only
+// page where every row genuinely is today. Matches TradeBook's own
+// formatDateTime (both pages show date+time unconditionally now).
+function formatDateTime(timestamp: string): string {
   if (!timestamp) return '-'
 
   const timeValue = parseTimestamp(timestamp)
-  if (timeValue === 0) {
-    // Last resort: extract HH:MM:SS if embedded in the string
-    const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
-    return timeMatch ? timeMatch[1] : timestamp
-  }
+  if (timeValue === 0) return timestamp
 
   const date = new Date(timeValue)
-  return date.toLocaleTimeString('en-IN', {
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -751,7 +754,7 @@ export default function OrderBook() {
                               </div>
                             </TableCell>
                             <TableCell className="text-sm text-muted-foreground">
-                              {formatTime(order.timestamp)}
+                              {formatDateTime(order.timestamp)}
                             </TableCell>
                             <TableCell>
                               {canCancel && (

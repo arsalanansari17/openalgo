@@ -80,18 +80,27 @@ function parseTimestamp(timestamp: string): number {
   return date.getTime() || 0
 }
 
-function formatTime(timestamp: string): string {
+// Full date+time, always - a time-only display on the live (today-only)
+// view read as "the date is missing" rather than "this is always today,"
+// so both live and historical rows show date+time unconditionally now
+// (previously live used a time-only formatTime() and historical showed
+// the raw ISO string with no formatting at all). Routes through
+// parseTimestamp for the same defensive multi-broker fallback the old
+// formatTime had, though rows are always clean ISO in practice (live:
+// broker/{zerodha,kotak}/mapping/order_data.py normalizes at the source;
+// historical: database/pnl_db.py's parse_trade_timestamp normalizes at
+// write time).
+function formatDateTime(timestamp: string): string {
   if (!timestamp) return '-'
 
   const timeValue = parseTimestamp(timestamp)
-  if (timeValue === 0) {
-    // Last resort: extract HH:MM:SS if embedded in the string
-    const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
-    return timeMatch ? timeMatch[1] : timestamp
-  }
+  if (timeValue === 0) return timestamp
 
   const date = new Date(timeValue)
-  return date.toLocaleTimeString('en-IN', {
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -578,7 +587,7 @@ export default function TradeBook() {
                       </TableCell>
                       <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {formatTime(trade.timestamp)}
+                        {formatDateTime(trade.timestamp)}
                       </TableCell>
                     </TableRow>
                   ))}
