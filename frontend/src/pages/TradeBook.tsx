@@ -127,32 +127,16 @@ function parseTimestamp(timestamp: string): number {
   return date.getTime() || 0
 }
 
-function formatTime(timestamp: string): string {
-  if (!timestamp) return '-'
-
-  const timeValue = parseTimestamp(timestamp)
-  if (timeValue === 0) {
-    // Last resort: extract HH:MM:SS if embedded in the string
-    const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
-    return timeMatch ? timeMatch[1] : timestamp
-  }
-
-  const date = new Date(timeValue)
-  return date.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
-}
-
-// Full date+time for a historical row - unlike the live tradebook (always
-// today, so formatTime's time-only display is unambiguous), a historical
-// row can be from any day, and previously showed the raw ISO string
-// verbatim with no formatting at all (isHistorical ? trade.timestamp : ...).
-// Routes through parseTimestamp for the same defensive multi-broker
-// fallback formatTime already gets, though historical rows are always
-// clean ISO from the ledger (database/pnl_db.py's parse_trade_timestamp
-// normalizes at write time) in practice.
+// Full date+time, always - a time-only display on the live (today-only)
+// view read as "the date is missing" rather than "this is always today,"
+// so both live and historical rows show date+time unconditionally now
+// (previously live used a time-only formatTime() and historical showed
+// the raw ISO string with no formatting at all). Routes through
+// parseTimestamp for the same defensive multi-broker fallback the old
+// formatTime had, though rows are always clean ISO in practice (live:
+// broker/{zerodha,kotak}/mapping/order_data.py normalizes at the source;
+// historical: database/pnl_db.py's parse_trade_timestamp normalizes at
+// write time).
 function formatDateTime(timestamp: string): string {
   if (!timestamp) return '-'
 
@@ -1077,9 +1061,7 @@ export default function TradeBook() {
                         </TableCell>
                       )}
                       <TableCell className="text-sm text-muted-foreground">
-                        {isHistorical
-                          ? formatDateTime(trade.timestamp)
-                          : formatTime(trade.timestamp)}
+                        {formatDateTime(trade.timestamp)}
                       </TableCell>
                     </TableRow>
                   ))}
