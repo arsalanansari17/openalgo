@@ -1,9 +1,29 @@
 import json
 
 from database.token_db import get_oa_symbol, get_symbol
+from utils.broker_timestamp import parse_broker_timestamp
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _normalize_timestamp(value):
+    """Canonical ISO 8601 string (T separator, no timezone suffix - every
+    broker timestamp here is exchange-local IST already) for every
+    timestamp OpenAlgo hands to a frontend. Kite's own REST API (called
+    directly, not via the pykiteconnect SDK - see order_timestamp vs
+    fill_timestamp comment below) returns plain "YYYY-MM-DD HH:MM:SS"
+    strings; parse_broker_timestamp already handles that shape (utils/,
+    not database/pnl_db.py - the P&L ledger's own module - deliberately,
+    so this normalization works regardless of whether an account's branch
+    has that fork-only feature at all). Falsy input stays falsy rather
+    than silently becoming "now" - parse_broker_timestamp's own fallback
+    is for a genuinely-malformed non-empty value, not a legitimately-
+    missing one.
+    """
+    if not value:
+        return value
+    return parse_broker_timestamp(value).isoformat()
 
 
 def _to_float(value, default=0.0):
@@ -139,7 +159,7 @@ def transform_order_data(orders):
             "product": order.get("product", ""),
             "orderid": order.get("order_id", ""),
             "order_status": order_status,
-            "timestamp": order.get("order_timestamp", ""),
+            "timestamp": _normalize_timestamp(order.get("order_timestamp", "")),
         }
 
         transformed_orders.append(transformed_order)
@@ -186,7 +206,7 @@ def transform_tradebook_data(tradebook_data):
             # (services/telegram_bot_service*.py, broker/groww's own
             # adapter) already expect that exact key.
             "tradeid": trade.get("trade_id", ""),
-            "timestamp": trade.get("fill_timestamp") or trade.get("order_timestamp", ""),
+            "timestamp": _normalize_timestamp(trade.get("fill_timestamp") or trade.get("order_timestamp", "")),
         }
         transformed_data.append(transformed_trade)
     return transformed_data
