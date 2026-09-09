@@ -11,7 +11,9 @@ explicit design call - "this is how zerodha or broker would be doing" -
 extended from one trading day to an arbitrary date range.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from sqlalchemy import or_
 
 from database.auth_db import get_auth_token_broker
 from database.pnl_db import (
@@ -28,8 +30,19 @@ from utils.pnl_fifo import compute_realized_pnl, summarize_by_day
 
 logger = get_logger(__name__)
 
+# get_pnl_history's FIFO lookback (see fifo_lookback below): F&O contracts
+# (and currency/commodity, also expiry-based) always expire well within a
+# year, so a leg that's still open can't be older than this - unlike
+# equity/mutual_fund holdings, which can genuinely be years old. Keeps the
+# widened FIFO query from scanning the whole ledger for the common,
+# expiry-bounded segments.
+_FNO_LOOKBACK_DAYS = 365
+_LONG_HOLD_SEGMENTS = ("equity", "mutual_fund")
 
-def _parse_range_and_build_query(start_date, end_date, symbol=None, segment=None, strategy=None):
+
+def _parse_range_and_build_query(
+    start_date, end_date, symbol=None, segment=None, strategy=None, fifo_lookback=False
+):
     """Shared by get_pnl_history and get_pnl_trades: parse the date range,
     validate segment, and build the base PnlTrade query. Returns
     (error_response_or_None, query_or_None, start, end).
@@ -41,6 +54,19 @@ def _parse_range_and_build_query(start_date, end_date, symbol=None, segment=None
     single-strategy by construction - no ambiguity about which strategy a
     given closed lot (which can span two physical fills) belongs to,
     because only that one strategy's fills were ever in the query.
+
+    fifo_lookback=True (get_pnl_history only) widens the query's lower
+    bound past start_date: FIFO matching needs to see a position's actual
+    entry fill even when it happened long before the requested range, or a
+    sell that's really closing a months/years-old buy gets misread as
+    opening a brand-new short and reports the wrong (often zero) realized
+    P&L - Zerodha's own convention is to still book it. How far back
+    depends on the segment: equity/mutual_fund get no lower bound at all
+    (a holding can be years old); everything else (fno/currency/commodity,
+    all expiry-based) is capped at _FNO_LOOKBACK_DAYS before end_date,
+    since a still-open leg there can't be older than that. get_pnl_trades
+    (raw historical fills, no FIFO involved) never sets this - it always
+    wants the exact requested range.
     """
     try:
         start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -65,9 +91,23 @@ def _parse_range_and_build_query(start_date, end_date, symbol=None, segment=None
             None,
         )
 
-    query = db_session.query(PnlTrade).filter(
-        PnlTrade.trade_timestamp >= start, PnlTrade.trade_timestamp <= end
-    )
+    if fifo_lookback:
+        lookback_cutoff = end - timedelta(days=_FNO_LOOKBACK_DAYS)
+        query = db_session.query(PnlTrade).filter(
+            PnlTrade.trade_timestamp <= end,
+            or_(
+                PnlTrade.segment.in_(_LONG_HOLD_SEGMENTS),
+                # Unknown/pre-migration segment: err on the side of
+                # scanning more, not silently truncating a real position.
+                PnlTrade.segment.is_(None),
+                PnlTrade.trade_timestamp >= lookback_cutoff,
+            ),
+        )
+    else:
+        query = db_session.query(PnlTrade).filter(
+            PnlTrade.trade_timestamp >= start, PnlTrade.trade_timestamp <= end
+        )
+
     if symbol:
         query = query.filter(PnlTrade.symbol == symbol)
     if segment:
@@ -107,7 +147,7 @@ def get_pnl_history(
         return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
 
     error, query, start, end = _parse_range_and_build_query(
-        start_date, end_date, symbol=symbol, segment=segment, strategy=strategy
+        start_date, end_date, symbol=symbol, segment=segment, strategy=strategy, fifo_lookback=True
     )
     if error:
         return error
@@ -116,6 +156,10 @@ def get_pnl_history(
         # Chronological order matters for FIFO correctness (utils/pnl_fifo.py
         # sorts again internally, but ties on an identical timestamp then
         # fall back to this insertion/id order rather than an arbitrary one).
+        # fifo_lookback=True means these rows can reach back well before
+        # start_date - deliberately, so a lot that opened long ago but
+        # closed inside the requested range is matched against its real
+        # entry fill rather than being misread as a brand-new position.
         rows = query.order_by(PnlTrade.trade_timestamp.asc(), PnlTrade.id.asc()).all()
 
         trades = [
@@ -132,7 +176,25 @@ def get_pnl_history(
         ]
 
         result = compute_realized_pnl(trades)
-        daily = summarize_by_day(result)
+
+        # Only report lots that actually closed within [start_date,
+        # end_date] - fills from outside the range were pulled in solely so
+        # FIFO could see a position's true entry (see
+        # _parse_range_and_build_query's fifo_lookback docstring). A lot
+        # that closed last year (or, for F&O, last month) is real,
+        # correctly-computed P&L, just not part of *this* report; it will
+        # show up when that lot's own date range is queried instead.
+        lots_in_range = [
+            lot
+            for lot in result.realized_lots
+            if lot.exit_timestamp and start_date <= str(lot.exit_timestamp)[:10] <= end_date
+        ]
+        daily = summarize_by_day(lots_in_range)
+
+        # Raw-fill count inside the requested range specifically (not the
+        # wider fifo_lookback query above) - matches what "N trades this
+        # week" should mean to whoever's reading it.
+        trade_count = sum(1 for row in rows if start <= row.trade_timestamp <= end)
 
         return (
             True,
@@ -141,8 +203,10 @@ def get_pnl_history(
                 "data": {
                     "start_date": start_date,
                     "end_date": end_date,
-                    "total_realized_pnl": round(result.total_realized_pnl, 2),
-                    "trade_count": len(trades),
+                    "total_realized_pnl": round(
+                        sum(lot.realized_pnl for lot in lots_in_range), 2
+                    ),
+                    "trade_count": trade_count,
                     "daily": [
                         {
                             "date": day["date"],
@@ -164,7 +228,7 @@ def get_pnl_history(
                             "exit_timestamp": str(lot.exit_timestamp),
                             "realized_pnl": round(lot.realized_pnl, 2),
                         }
-                        for lot in result.realized_lots
+                        for lot in lots_in_range
                     ],
                     "open_positions": [
                         {

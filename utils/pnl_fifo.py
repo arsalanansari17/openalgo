@@ -204,14 +204,22 @@ def _sort_timestamp(value):
     return str(value)
 
 
-def summarize_by_day(result: FifoResult) -> list[dict]:
+def summarize_by_day(realized_lots: list[RealizedLot]) -> list[dict]:
     """Roll realized lots up into per-day totals (date, realized_pnl, number
     of closed lots) - the shape a Zerodha-Console-style calendar view wants.
     Uses the lot's exit date (when the P&L was actually realized), not the
     entry date.
+
+    Takes a plain list of lots rather than a whole FifoResult so a caller
+    can hand in a date-range-filtered subset - see
+    services/pnl_history_service.py::get_pnl_history, which FIFO-matches a
+    wider lookback than the requested range (so a position opened long
+    before start_date is still carried in correctly), then filters down to
+    only the lots that actually closed within [start_date, end_date]
+    before summarizing here.
     """
     by_day: dict[str, dict] = {}
-    for lot in result.realized_lots:
+    for lot in realized_lots:
         day = str(lot.exit_timestamp)[:10] if lot.exit_timestamp else "unknown"
         bucket = by_day.setdefault(day, {"date": day, "realized_pnl": 0.0, "trade_count": 0})
         bucket["realized_pnl"] += lot.realized_pnl

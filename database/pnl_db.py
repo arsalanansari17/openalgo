@@ -19,11 +19,16 @@ Named for what it actually stores - the raw fill ledger, i.e. a tradebook
 on demand at read time (see the two tables below).
 
 Two tables:
-- ``pnl_trades``: the captured/imported per-fill trade ledger. This is the
-  only persisted P&L-related state - realized P&L itself is computed on read
-  by ``utils/pnl_fifo.py`` from these rows (same "no precomputed P&L, always
-  derive it" philosophy the built-in intraday PnL Tracker already uses;
-  it's how a real broker's own console report works too).
+- ``tradebook_fills``: the captured/imported per-fill trade ledger. This is
+  the only persisted P&L-related state - realized P&L itself is computed on
+  read by ``utils/pnl_fifo.py`` from these rows (same "no precomputed P&L,
+  always derive it" philosophy the built-in intraday PnL Tracker already
+  uses; it's how a real broker's own console report works too). Originally
+  created as ``pnl_trades``, which contradicted this very naming rationale -
+  renamed by ``_migrate_rename_pnl_trades_table()`` below; see that
+  function's docstring for the migration itself. The Python class stays
+  ``PnlTrade`` (unchanged) to avoid a much larger cross-file rename for a
+  purely cosmetic mismatch - only the physical SQL table name was wrong.
 - ``pnl_capture_runs``: an audit log of the daily capture job, mirroring
   Historify's own job-status bookkeeping (``download_jobs``/``job_items``)
   so a silent capture failure is visible rather than just a data gap.
@@ -69,7 +74,7 @@ load_dotenv()
 # dependency beyond SQLAlchemy itself).
 #
 # Named tradebook.db, not pnl.db: this file holds the raw fill ledger only
-# (pnl_trades/pnl_capture_runs) - realized P&L itself is never stored,
+# (tradebook_fills/pnl_capture_runs) - realized P&L itself is never stored,
 # always computed on demand by utils/pnl_fifo.py at read time. "pnl.db"
 # would have implied a stored P&L value that doesn't exist.
 TRADEBOOK_DATABASE_URL = os.getenv("TRADEBOOK_DATABASE_URL", "sqlite:///db/tradebook.db")
@@ -200,7 +205,7 @@ class PnlTrade(Base):
     at read time, never stored.
     """
 
-    __tablename__ = "pnl_trades"
+    __tablename__ = "tradebook_fills"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
@@ -253,8 +258,13 @@ class PnlTrade(Base):
     created_at = Column(DateTime, nullable=False, default=func.now())
 
     __table_args__ = (
-        Index("idx_pnl_trades_symbol_exchange_ts", "symbol", "exchange", "trade_timestamp"),
-        Index("idx_pnl_trades_ts", "trade_timestamp"),
+        # Names only take effect on a fresh CREATE TABLE - an already-renamed
+        # production table keeps its original idx_pnl_trades_* index names
+        # (SQLite's ALTER TABLE RENAME TO doesn't rename indexes along with
+        # the table); cosmetic only, they keep indexing tradebook_fills
+        # correctly under the old name either way.
+        Index("idx_tradebook_fills_symbol_exchange_ts", "symbol", "exchange", "trade_timestamp"),
+        Index("idx_tradebook_fills_ts", "trade_timestamp"),
     )
 
 
@@ -286,54 +296,106 @@ def init_db():
     from database.db_init_helper import _ensure_sqlite_dir, init_db_with_logging
 
     _ensure_sqlite_dir(engine)
+    # Must run before create_all: the model's __tablename__ is already
+    # "tradebook_fills", so on an un-migrated database create_all would
+    # otherwise create a fresh, empty tradebook_fills table first - and then
+    # this rename would fail because that name is already taken.
+    _migrate_rename_pnl_trades_table()
     init_db_with_logging(Base, engine, "Tradebook DB", logger)
     _migrate_add_segment_column()
     _migrate_add_strategy_column()
 
 
-def _migrate_add_segment_column():
-    """Add pnl_trades.segment to a database created before it existed.
+def _migrate_rename_pnl_trades_table():
+    """One-time rename: the table was originally created as ``pnl_trades``,
+    which contradicted this file's own naming rationale (see the module
+    docstring) - it holds the raw fill ledger (a tradebook), not a stored
+    P&L number. Renamed to ``tradebook_fills`` to match; the Python class
+    (``PnlTrade``) is left as-is.
 
-    Mirrors sandbox_db.py's own column-migration pattern
-    (_migrate_add_order_gtt_leg_id) - create_all's checkfirst only guards
-    at the table level, so an existing table never gets a newly-added
-    column without an explicit ALTER TABLE.
+    Idempotent and safe on every install:
+    - fresh (neither table exists yet): no-op - create_all creates
+      tradebook_fills fresh right after this returns.
+    - already migrated (tradebook_fills exists): no-op.
+    - un-migrated production data (pnl_trades exists with real rows, e.g.
+      acc1/acc2 before this fix): renamed in place. SQLite's
+      ``ALTER TABLE ... RENAME TO`` preserves every row, the dedup_key
+      unique constraint, and all existing indexes (under their original
+      idx_pnl_trades_* names - SQLite doesn't rename indexes along with
+      their table, which is harmless: see the Index() comment above).
     """
     from sqlalchemy import text
 
     try:
         with engine.connect() as conn:
-            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(pnl_trades)"))}
+            tables = {
+                row[0]
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            }
+            if "tradebook_fills" in tables or "pnl_trades" not in tables:
+                return
+            conn.execute(text("ALTER TABLE pnl_trades RENAME TO tradebook_fills"))
+            conn.commit()
+            logger.info("Renamed pnl_trades -> tradebook_fills")
+    except Exception:
+        logger.exception("Could not rename pnl_trades -> tradebook_fills")
+
+
+def _migrate_add_segment_column():
+    """Add tradebook_fills.segment to a database created before it existed.
+
+    Mirrors sandbox_db.py's own column-migration pattern
+    (_migrate_add_order_gtt_leg_id) - create_all's checkfirst only guards
+    at the table level, so an existing table never gets a newly-added
+    column without an explicit ALTER TABLE. Runs after
+    _migrate_rename_pnl_trades_table(), so the table is already named
+    tradebook_fills by the time this queries it.
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            existing = {
+                row[1] for row in conn.execute(text("PRAGMA table_info(tradebook_fills)"))
+            }
             if not existing or "segment" in existing:
                 return
-            conn.execute(text("ALTER TABLE pnl_trades ADD COLUMN segment VARCHAR(20)"))
+            conn.execute(text("ALTER TABLE tradebook_fills ADD COLUMN segment VARCHAR(20)"))
             # ALTER TABLE ADD COLUMN doesn't pick up the model's index=True -
             # that only fires from create_all - so it's created explicitly.
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_pnl_trades_segment ON pnl_trades(segment)")
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_tradebook_fills_segment "
+                    "ON tradebook_fills(segment)"
+                )
             )
             conn.commit()
-            logger.info("Added pnl_trades.segment")
+            logger.info("Added tradebook_fills.segment")
     except Exception:
-        logger.exception("Could not add pnl_trades.segment")
+        logger.exception("Could not add tradebook_fills.segment")
 
 
 def _migrate_add_strategy_column():
-    """Add pnl_trades.strategy to a database created before it existed.
+    """Add tradebook_fills.strategy to a database created before it existed.
     Same pattern as _migrate_add_segment_column().
     """
     from sqlalchemy import text
 
     try:
         with engine.connect() as conn:
-            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(pnl_trades)"))}
+            existing = {
+                row[1] for row in conn.execute(text("PRAGMA table_info(tradebook_fills)"))
+            }
             if not existing or "strategy" in existing:
                 return
-            conn.execute(text("ALTER TABLE pnl_trades ADD COLUMN strategy VARCHAR(120)"))
+            conn.execute(text("ALTER TABLE tradebook_fills ADD COLUMN strategy VARCHAR(120)"))
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_pnl_trades_strategy ON pnl_trades(strategy)")
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_tradebook_fills_strategy "
+                    "ON tradebook_fills(strategy)"
+                )
             )
             conn.commit()
-            logger.info("Added pnl_trades.strategy")
+            logger.info("Added tradebook_fills.strategy")
     except Exception:
-        logger.exception("Could not add pnl_trades.strategy")
+        logger.exception("Could not add tradebook_fills.strategy")
