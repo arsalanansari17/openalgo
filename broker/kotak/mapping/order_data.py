@@ -1,8 +1,21 @@
 from broker.kotak.mapping.transform_data import map_exchange
 from database.token_db import get_oa_symbol, get_symbol
+from utils.broker_timestamp import parse_broker_timestamp
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _normalize_timestamp(value):
+    """Canonical ISO 8601 string (T separator) for every timestamp OpenAlgo
+    hands to a frontend - see the matching helper + full rationale in
+    broker/zerodha/mapping/order_data.py. Kotak's ordEntTm/exTm come back as
+    "DD-MM-YYYY HH:MM:SS"; parse_broker_timestamp already covers that
+    shape. Falsy input stays falsy rather than becoming "now".
+    """
+    if not value:
+        return value
+    return parse_broker_timestamp(value).isoformat()
 
 
 def _openalgo_symbol(row, exchange):
@@ -163,7 +176,7 @@ def transform_order_data(orders):
             "product": order.get("prod", ""),
             "orderid": order.get("nOrdNo", ""),
             "order_status": order.get("ordSt", ""),
-            "timestamp": order.get("ordEntTm", ""),
+            "timestamp": _normalize_timestamp(order.get("ordEntTm", "")),
         }
 
         transformed_orders.append(transformed_order)
@@ -237,7 +250,7 @@ def transform_tradebook_data(tradebook_data):
             # (services/telegram_bot_service*.py, broker/groww's own
             # adapter) already expect that exact key.
             "tradeid": trade.get("flId", ""),
-            "timestamp": trade.get("exTm", ""),
+            "timestamp": _normalize_timestamp(trade.get("exTm", "")),
         }
         transformed_data.append(transformed_trade)
     return transformed_data
