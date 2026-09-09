@@ -6,6 +6,76 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-09-08 — acc3 sync onto origin/main tip, for Kotak historical data (12 commits)
+
+**Branch:** `acc3-sync-2026-09-08` (from `main-sync-2026-09-05` @ `b9b0c15ccb`
+to `origin/main` @ `f29d641b6`, 12 commits). Trigger: Kotak Neo shipped
+historical-data support upstream (`44c488c25`) - acc3 needed it, acc1/acc2 are
+untouched by this round (Zerodha-only commits in range are irrelevant to them
+too; this was scoped to acc3 alone).
+
+**Reconciliation, file by file** (6 real conflicts; every other conflicted
+path was `frontend/dist/`'s content-hashed filenames re-renaming themselves,
+resolved by deleting `dist/` wholesale and rebuilding fresh rather than
+picking a side):
+
+- **Kept wholesale (zero fork-only content beyond the previous sync itself):**
+  none of the 6 real conflicts qualified - every one of them had a documented
+  fork-only patch from the 2026-09-05 entry above, layered on top of the
+  *previous* origin/main content at that sync. The mistake made mid-session
+  and caught before deploy: checking `git log <old-merge-base>..<deployed-branch>
+  -- <file>` (which only shows `509aff13c`, the old bulk-sync commit, for
+  all 6 - looks like "nothing fork-specific here") instead of `git log
+  <deployed-branch>..origin/main -- <file>` (which shows the *new* commits
+  that actually justify a real per-file diff read). Taking `--theirs` on
+  all 6 based on the wrong check dropped five real patches; caught when
+  `npm run build` failed on `Holdings.tsx` referencing fields `trading.ts`
+  no longer had, then confirmed against every other file by grepping for
+  each patch's own marker.
+- **Merged (real per-file reconciliation, patch content unchanged from
+  2026-09-05, re-applied onto the new origin content):**
+  - `broker/kotak/api/data.py` -- `44c488c25`/`0b9fc879e` touched it (Kotak
+    historical data + HSM decode/SFeed streaming). Re-applied the INDIAVIX
+    quotes-candidate order fix (`["INDIA VIX", "India VIX"]`) - unrelated to
+    and not covered by `44c488c25`'s own INDIAVIX handling, which is scoped
+    to the historical-data path only, not quotes.
+  - `broker/kotak/database/master_contract_db.py` -- `0b9fc879e` touched it.
+    Re-applied `_ensure_synthetic_index_rows()` (India VIX SymToken row,
+    absent from Kotak's own instrument master).
+  - `broker/kotak/streaming/kotak_websocket.py` + `kotak_adapter.py` --
+    `0b9fc879e` touched both (the SFeed migration: new `sfeed_websocket.py`/
+    `sfeed_protocol.py`/`kotak_feed_config.py`, HSM decode fix). Re-applied
+    `_real_threading` (Kotak counterpart to upstream #1421) on both - this
+    is the fix for the greenlet crash that wedged acc3 3x in one evening
+    (2026-08-31 entry below); losing it silently on a routine sync would
+    have been a severe regression.
+  - `broker/zerodha/mapping/order_data.py` -- `122390cc5` touched it
+    (tradebook `fill_timestamp` fix, unrelated to holdings). Re-applied
+    `t1_quantity`/`pledged_quantity` on holdings and `_total_qty()` in
+    `calculate_portfolio_statistics` (fix/holdings-pledge-t1-quantity) --
+    acc3 doesn't run Zerodha, but this file is shared code that will reach
+    acc1/acc2 whenever they next sync, so leaving it dropped here would
+    have silently regressed both on their next routine update.
+  - `frontend/src/types/trading.ts` -- `bb89272ee` touched it (added
+    `GttLeg.triggered_order_id` for GTT order-book history). Re-added
+    `Holding.t1_quantity`/`pledged_quantity`/`day_change`/`day_change_percent`
+    and `PortfolioStats.totaldaypnl`/`totaldaypnlpercentage` alongside
+    origin's new field, rather than losing them to a wholesale pick either
+    way.
+- **Verified:** `uv run pytest` (95 kotak/zerodha/upstox tests, all pass),
+  `uv run ruff check broker/kotak/` (15 pre-existing upstream style findings,
+  confirmed identical against origin/main's own unmodified content - not
+  introduced by this merge), `npm run build` (clean after the trading.ts
+  fix), grepped every patch's own marker in source and (for the frontend
+  ones) in the rebuilt `dist/` bundle to confirm each landed.
+- **Not carried this round:** the AlgoMirror date-range-preset filter chips
+  (`frontend/src/lib/dateRangePresets.ts`, `DateRangePresets.tsx`,
+  `PnlHistory.tsx`/`TradeBook.tsx` filter-row changes) sitting uncommitted on
+  `upgrade-main-2026-09` (acc1's branch) - unrelated feature, deliberately
+  excluded from this acc3-only sync branch.
+
+---
+
 ## 2026-09-05 — Sync fork onto origin/main tip (2.0.2.1 -> past 2.0.2.2, ~324 commits)
 
 **Branch:** `upgrade-main-2026-09` (from `main-sync-2026-08-23` @ `b46cd7243`
