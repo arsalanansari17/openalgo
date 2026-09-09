@@ -145,6 +145,31 @@ function formatTime(timestamp: string): string {
   })
 }
 
+// Full date+time for a historical row - unlike the live tradebook (always
+// today, so formatTime's time-only display is unambiguous), a historical
+// row can be from any day, and previously showed the raw ISO string
+// verbatim with no formatting at all (isHistorical ? trade.timestamp : ...).
+// Routes through parseTimestamp for the same defensive multi-broker
+// fallback formatTime already gets, though historical rows are always
+// clean ISO from the ledger (database/pnl_db.py's parse_trade_timestamp
+// normalizes at write time) in practice.
+function formatDateTime(timestamp: string): string {
+  if (!timestamp) return '-'
+
+  const timeValue = parseTimestamp(timestamp)
+  if (timeValue === 0) return timestamp
+
+  const date = new Date(timeValue)
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
 // YYYY-MM-DD bucket key for a trade timestamp, for the heat map below. Most
 // timestamps are already ISO-prefixed (historical rows from the ledger);
 // non-ISO broker formats fall back through parseTimestamp then read the
@@ -1052,7 +1077,9 @@ export default function TradeBook() {
                         </TableCell>
                       )}
                       <TableCell className="text-sm text-muted-foreground">
-                        {isHistorical ? trade.timestamp : formatTime(trade.timestamp)}
+                        {isHistorical
+                          ? formatDateTime(trade.timestamp)
+                          : formatTime(trade.timestamp)}
                       </TableCell>
                     </TableRow>
                   ))}

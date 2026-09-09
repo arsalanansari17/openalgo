@@ -56,6 +56,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
+from utils.broker_timestamp import parse_broker_timestamp
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -130,28 +131,13 @@ def parse_trade_timestamp(value, fallback=None):
     for storage. Shared by the daily capture job and the CSV import path so
     both writers normalize the same way.
 
-    Falls back to ``fallback`` (or now) rather than raising - one
-    malformed timestamp must not lose an entire capture run or import batch.
+    Thin wrapper around utils/broker_timestamp.py's parse_broker_timestamp -
+    that module has the actual parsing logic and no dependency on this
+    (fork-only, upgrade-main-2026-09-only) module, so broker/{zerodha,kotak}/
+    mapping/order_data.py can share the same normalization without pulling
+    in the whole P&L ledger feature on branches that don't have it.
     """
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=None) if value.tzinfo else value
-
-    if value:
-        for fmt in (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%dT%H:%M:%S",
-            "%d-%m-%Y %H:%M:%S",
-            "%d-%b-%Y %H:%M:%S",
-            "%Y-%m-%d",
-            "%d-%m-%Y",
-        ):
-            try:
-                return datetime.strptime(str(value), fmt)
-            except ValueError:
-                continue
-        logger.warning(f"Could not parse trade timestamp {value!r}")
-
-    return fallback if fallback is not None else datetime.now()
+    return parse_broker_timestamp(value, fallback)
 
 
 # Segment, alongside the existing exchange/product columns - user-requested

@@ -237,7 +237,15 @@ def get_pnl_trades(
                 "tradeid": row.tradeid or "",
                 "segment": row.segment,
                 "strategy": row.strategy,
-                "timestamp": row.trade_timestamp.isoformat(sep=" "),
+                # Plain isoformat() (T separator) - matches get_pnl_history's
+                # closed_trades entry/exit timestamps above (line ~129) and
+                # the canonical ISO 8601 shape every timestamp on the wire
+                # now uses (see database/pnl_db.py's parse_trade_timestamp
+                # and the broker-side normalization in
+                # broker/{zerodha,kotak}/mapping/order_data.py). Used to be
+                # isoformat(sep=" "), a silent format mismatch between two
+                # sibling endpoints for the same underlying column.
+                "timestamp": row.trade_timestamp.isoformat(),
             }
             for row in rows
         ]
