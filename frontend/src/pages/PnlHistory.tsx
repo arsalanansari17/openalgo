@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { PnlHistoryClosedTrade, PnlHistoryDailyRow, StrategyLeg } from '@/api/trading'
 import { tradingApi } from '@/api/trading'
 import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
+import { DateRangePresets } from '@/components/reports/DateRangePresets'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -85,6 +86,7 @@ export default function PnlHistory() {
   const [strategyLegs, setStrategyLegs] = useState<StrategyLeg[]>([])
   const [startDate, setStartDate] = useState(defaultStartDate())
   const [endDate, setEndDate] = useState(defaultEndDate())
+  const [activeDatePreset, setActiveDatePreset] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [hasFetched, setHasFetched] = useState(false)
   const [totalRealizedPnl, setTotalRealizedPnl] = useState(0)
@@ -93,19 +95,24 @@ export default function PnlHistory() {
   const [closedTrades, setClosedTrades] = useState<PnlHistoryClosedTrade[]>([])
   const [view, setView] = useState<'day' | 'scrip'>('day')
 
-  const fetchHistory = async () => {
+  // Optional overrides let a date-range preset fetch immediately with the
+  // range it just picked, rather than the (stale, pre-setState) closure
+  // values of startDate/endDate.
+  const fetchHistory = async (overrideStart?: string, overrideEnd?: string) => {
+    const effectiveStart = overrideStart ?? startDate
+    const effectiveEnd = overrideEnd ?? endDate
     if (!apiKey) {
       showToast.error('API key not available', 'system')
       return
     }
-    if (!startDate || !endDate) {
+    if (!effectiveStart || !effectiveEnd) {
       showToast.warning('Select both a start and end date', 'system')
       return
     }
 
     setIsLoading(true)
     try {
-      const response = await tradingApi.getPnlHistory(apiKey, startDate, endDate, {
+      const response = await tradingApi.getPnlHistory(apiKey, effectiveStart, effectiveEnd, {
         symbol: symbol.trim().toUpperCase(),
         segment: segment === 'all' ? undefined : segment,
         strategy: strategy === 'all' ? undefined : strategy,
@@ -124,6 +131,13 @@ export default function PnlHistory() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleDatePresetSelect = (start: string, end: string, key: string) => {
+    setStartDate(start)
+    setEndDate(end)
+    setActiveDatePreset(key)
+    fetchHistory(start, end)
   }
 
   // Populates the Strategy filter's options - fetched once on mount rather
@@ -323,7 +337,10 @@ export default function PnlHistory() {
                 type="date"
                 value={startDate}
                 max={endDate}
-                onChange={(e) => setStartDate(e.target.value)}
+                onChange={(e) => {
+                  setStartDate(e.target.value)
+                  setActiveDatePreset(null)
+                }}
               />
             </div>
             <div className="flex-1 space-y-1">
@@ -334,10 +351,17 @@ export default function PnlHistory() {
                 value={endDate}
                 min={startDate}
                 max={defaultEndDate()}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={(e) => {
+                  setEndDate(e.target.value)
+                  setActiveDatePreset(null)
+                }}
               />
             </div>
-            <Button onClick={fetchHistory} disabled={isLoading} aria-label="Fetch P&L history">
+            <Button
+              onClick={() => fetchHistory()}
+              disabled={isLoading}
+              aria-label="Fetch P&L history"
+            >
               {isLoading ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
@@ -345,6 +369,15 @@ export default function PnlHistory() {
               )}
               Fetch
             </Button>
+          </div>
+          {/* Spacer matches the combined width of Segment+Symbol+Strategy
+              (3 flex-1 fields) so the chip row lands under Start/End date
+              (2 flex-1 fields) rather than the far left. */}
+          <div className="flex flex-col sm:flex-row gap-4 mt-4">
+            <div className="hidden sm:block flex-[3]" />
+            <div className="flex-[2]">
+              <DateRangePresets activeKey={activeDatePreset} onSelect={handleDatePresetSelect} />
+            </div>
           </div>
         </CardContent>
       </Card>
