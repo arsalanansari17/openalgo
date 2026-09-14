@@ -10,7 +10,7 @@
  */
 import { Loader2, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import type { PnlHistoryClosedTrade, PnlHistoryDailyRow, StrategyLeg } from '@/api/trading'
+import type { PnlHistoryClosedTrade, PnlHistoryDailyRow } from '@/api/trading'
 import { tradingApi } from '@/api/trading'
 import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
 import { DateRangePresets } from '@/components/reports/DateRangePresets'
@@ -83,7 +83,6 @@ export default function PnlHistory() {
   // Segment.
   const [strategy, setStrategy] = useState<'all' | string>('all')
   const [strategyOptions, setStrategyOptions] = useState<string[]>([])
-  const [strategyLegs, setStrategyLegs] = useState<StrategyLeg[]>([])
   const [startDate, setStartDate] = useState(defaultStartDate())
   const [endDate, setEndDate] = useState(defaultEndDate())
   const [activeDatePreset, setActiveDatePreset] = useState<string | null>(null)
@@ -152,7 +151,6 @@ export default function PnlHistory() {
         if (response.status === 'success' && response.data) {
           const names = Array.from(new Set(response.data.map((leg) => leg.strategy))).sort()
           setStrategyOptions(names)
-          setStrategyLegs(response.data)
         }
       })
       .catch(() => {
@@ -221,67 +219,6 @@ export default function PnlHistory() {
           </p>
         </div>
       </div>
-
-      {/* Strategy Positions - not date-ranged like everything below. Reads
-          straight from database/strategy_book_db.py's already-running
-          strategy book (SKYSHIELD_PATCHES.md): "holdings, per strategy",
-          already computed server-side, not derived from this page's own
-          ledger/FIFO matching at all. Filtered client-side to whichever
-          strategy is picked in the filter row below, for consistency with
-          the rest of the page. */}
-      {strategyLegs.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Strategy Positions</CardTitle>
-            <CardDescription>
-              Current open legs and cumulative realized P&L per strategy
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Strategy</TableHead>
-                    <TableHead>Symbol</TableHead>
-                    <TableHead>Exchange</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead className="text-right">Qty</TableHead>
-                    <TableHead className="text-right">Avg Price</TableHead>
-                    <TableHead className="text-right">Realized P&L</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {strategyLegs
-                    .filter((leg) => strategy === 'all' || leg.strategy === strategy)
-                    .map((leg) => (
-                      <TableRow
-                        key={`${leg.strategy}-${leg.symbol}-${leg.exchange}-${leg.product}`}
-                      >
-                        <TableCell>{leg.strategy}</TableCell>
-                        <TableCell>{leg.symbol}</TableCell>
-                        <TableCell>{leg.exchange}</TableCell>
-                        <TableCell>{leg.product}</TableCell>
-                        <TableCell className="text-right">{leg.quantity}</TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(leg.average_price)}
-                        </TableCell>
-                        <TableCell
-                          className={cn(
-                            'text-right font-medium',
-                            leg.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'
-                          )}
-                        >
-                          {formatCurrency(leg.realized_pnl)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Filters: Segment, Symbol, Strategy, Date range - same order as
           Zerodha Console's own Tradebook/P&L report filters, Strategy
