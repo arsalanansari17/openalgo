@@ -197,8 +197,13 @@ export default function TradeBook() {
 
   // P&L history CSV import (fork-only feature - SKYSHIELD_PATCHES.md)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
-  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importFiles, setImportFiles] = useState<File[]>([])
   const [isImporting, setIsImporting] = useState(false)
+  // Which file of the batch is currently uploading - null when idle, so the
+  // dialog can show "Importing 2 of 3: <name>" during a multi-file run.
+  const [importProgress, setImportProgress] = useState<{ index: number; total: number } | null>(
+    null
+  )
 
   // Historical view (fork-only - SKYSHIELD_PATCHES.md). Default date range
   // is the last 7 days, matching the Zerodha Console reference this filter
@@ -434,40 +439,74 @@ export default function TradeBook() {
   // multi-day P&L ledger - see openalgo's SKYSHIELD_PATCHES.md). Distinct
   // from exportToCSV above: this uploads a broker-exported tradebook CSV
   // rather than downloading the currently-filtered view.
+  //
+  // Files are sent one request per file, sequentially - not batched into a
+  // single request - because the backend commits an entire CSV as one
+  // transaction (services/pnl_history_service.py::import_trades_csv): one
+  // bad row anywhere in a combined upload would roll back every file, not
+  // just the offending one. A broker typically exports equity and F&O as
+  // two separate CSVs (see the tradebook page's own filter row), so this
+  // also lets both go in as one action without either one's failure
+  // silently discarding the other's rows.
   const importPnlHistory = async () => {
     if (!apiKey) {
       showToast.error('API key not available', 'system')
       return
     }
-    if (!importFile) {
-      showToast.warning('Please select a CSV file', 'system')
+    if (importFiles.length === 0) {
+      showToast.warning('Please select at least one CSV file', 'system')
       return
     }
 
     setIsImporting(true)
+    let totalImported = 0
+    let totalDuplicate = 0
+    let totalInvalid = 0
+    const failedFiles: string[] = []
+
     try {
-      const response = await tradingApi.importPnlHistoryCsv(apiKey, importFile)
-      if (response.status === 'success' && response.data) {
-        const { imported, skipped_duplicate, skipped_invalid } = response.data
+      for (let i = 0; i < importFiles.length; i++) {
+        const file = importFiles[i]
+        setImportProgress({ index: i + 1, total: importFiles.length })
+        try {
+          const response = await tradingApi.importPnlHistoryCsv(apiKey, file)
+          if (response.status === 'success' && response.data) {
+            totalImported += response.data.imported
+            totalDuplicate += response.data.skipped_duplicate
+            totalInvalid += response.data.skipped_invalid
+          } else {
+            failedFiles.push(file.name)
+          }
+        } catch {
+          // Isolated per file - one file's failure (a 500 from a bad row,
+          // a network blip) must not abort the rest of the batch.
+          failedFiles.push(file.name)
+        }
+      }
+
+      if (totalImported || totalDuplicate || totalInvalid) {
         showToast.success(
-          `Imported ${imported} trade(s)` +
-            (skipped_duplicate ? `, ${skipped_duplicate} already had them` : '') +
-            (skipped_invalid ? `, ${skipped_invalid} row(s) could not be read` : ''),
+          `Imported ${totalImported} trade(s)` +
+            (totalDuplicate ? `, ${totalDuplicate} already had them` : '') +
+            (totalInvalid ? `, ${totalInvalid} row(s) could not be read` : ''),
           'clipboard'
         )
-        setImportDialogOpen(false)
-        setImportFile(null)
-      } else {
-        showToast.error(response.message || 'Failed to import CSV', 'system')
       }
-    } catch (error: unknown) {
-      // Matching the pattern already used elsewhere (e.g. ActionCenter.tsx):
-      // a non-2xx response still carries our own {status, message} JSON
-      // body, so show that instead of a generic string when it's there.
-      const err = error as { response?: { data?: { message?: string } } }
-      showToast.error(err.response?.data?.message || 'Failed to import CSV', 'system')
+      if (failedFiles.length > 0) {
+        showToast.error(`Failed to import: ${failedFiles.join(', ')}`, 'system')
+      }
+
+      if (failedFiles.length === 0) {
+        setImportDialogOpen(false)
+        setImportFiles([])
+      } else {
+        // Leave the successfully-imported files out, keep the failed ones
+        // selected so the user can retry just those without reselecting.
+        setImportFiles((prev) => prev.filter((f) => failedFiles.includes(f.name)))
+      }
     } finally {
       setIsImporting(false)
+      setImportProgress(null)
     }
   }
 
@@ -642,7 +681,7 @@ export default function TradeBook() {
             open={importDialogOpen}
             onOpenChange={(open) => {
               setImportDialogOpen(open)
-              if (!open) setImportFile(null)
+              if (!open) setImportFiles([])
             }}
           >
             <DialogTrigger asChild>
@@ -655,19 +694,56 @@ export default function TradeBook() {
               <DialogHeader>
                 <DialogTitle>Import P&L History</DialogTitle>
                 <DialogDescription>
-                  Upload an exported tradebook CSV to backfill historical P&L for dates before
-                  automated capture started. Trades already recorded are skipped automatically.
+                  Upload exported tradebook CSVs (e.g. separate equity and F&O exports) to
+                  backfill historical P&L for dates before automated capture started. Trades
+                  already recorded are skipped automatically.
                 </DialogDescription>
               </DialogHeader>
-              <div className="py-2">
-                <Label htmlFor="pnl-import-file">Tradebook CSV</Label>
-                <Input
-                  id="pnl-import-file"
-                  type="file"
-                  accept=".csv"
-                  className="mt-2"
-                  onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
-                />
+              <div className="py-2 space-y-3">
+                <div>
+                  <Label htmlFor="pnl-import-file">Tradebook CSV(s)</Label>
+                  <Input
+                    id="pnl-import-file"
+                    type="file"
+                    accept=".csv"
+                    multiple
+                    className="mt-2"
+                    disabled={isImporting}
+                    onChange={(e) => setImportFiles(Array.from(e.target.files ?? []))}
+                  />
+                </div>
+                {importFiles.length > 0 && (
+                  <ul className="space-y-1 max-h-32 overflow-y-auto">
+                    {importFiles.map((file, index) => (
+                      <li
+                        key={`${file.name}-${index}`}
+                        className="flex items-center justify-between text-sm text-muted-foreground bg-muted/50 rounded px-2 py-1"
+                      >
+                        <span className="truncate">{file.name}</span>
+                        {!isImporting && (
+                          <button
+                            type="button"
+                            aria-label={`Remove ${file.name}`}
+                            onClick={() =>
+                              setImportFiles((prev) => prev.filter((_, i) => i !== index))
+                            }
+                            className="ml-2 shrink-0 hover:text-foreground"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {importProgress && (
+                  <p className="text-sm text-muted-foreground">
+                    Importing file {importProgress.index} of {importProgress.total}
+                    {importFiles[importProgress.index - 1]
+                      ? `: ${importFiles[importProgress.index - 1].name}`
+                      : ''}
+                  </p>
+                )}
               </div>
               <DialogFooter>
                 <Button
@@ -677,13 +753,16 @@ export default function TradeBook() {
                 >
                   Cancel
                 </Button>
-                <Button onClick={importPnlHistory} disabled={isImporting || !importFile}>
+                <Button
+                  onClick={importPnlHistory}
+                  disabled={isImporting || importFiles.length === 0}
+                >
                   {isImporting ? (
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   ) : (
                     <Upload className="h-4 w-4 mr-2" />
                   )}
-                  Upload
+                  Upload{importFiles.length > 1 ? ` (${importFiles.length})` : ''}
                 </Button>
               </DialogFooter>
             </DialogContent>

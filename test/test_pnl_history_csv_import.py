@@ -1,0 +1,89 @@
+# test/test_pnl_history_csv_import.py
+"""Regression test for the Zerodha Console segment mis-tagging bug
+(SKYSHIELD_PATCHES.md): Console's tradebook export sets exchange=NSE/BSE
+for F&O rows too, so deriving segment from exchange alone mis-tags every
+options/futures trade as equity. _normalize_csv_row must read the CSV's
+own segment column instead.
+"""
+
+from restx_api.pnl_history import _normalize_csv_row
+
+
+def test_fo_row_with_nse_exchange_maps_to_fno_segment():
+    # A real row shape from a Zerodha Console F&O tradebook export -
+    # exchange is the plain "NSE" code, not "NFO".
+    row = {
+        "symbol": "NIFTY2610625750PE",
+        "isin": "",
+        "trade_date": "2026-01-05",
+        "exchange": "NSE",
+        "segment": "FO",
+        "series": "",
+        "trade_type": "sell",
+        "auction": "false",
+        "quantity": "130.000000",
+        "price": "1.750000",
+        "trade_id": "4651213",
+        "order_id": "1400000230629349",
+        "order_execution_time": "2026-01-05T15:04:45",
+        "expiry_date": "2026-01-06",
+    }
+    normalized = _normalize_csv_row(row)
+    assert normalized["segment"] == "fno"
+    assert normalized["exchange"] == "NSE"
+
+
+def test_eq_row_maps_to_equity_segment():
+    row = {
+        "symbol": "CEIGALL",
+        "isin": "INE0AG901020",
+        "trade_date": "2026-01-05",
+        "exchange": "NSE",
+        "segment": "EQ",
+        "series": "EQ",
+        "trade_type": "buy",
+        "auction": "false",
+        "quantity": "30.000000",
+        "price": "271.399994",
+        "trade_id": "2803586",
+        "order_id": "1000000024048887",
+        "order_execution_time": "2026-01-05T11:25:11",
+    }
+    normalized = _normalize_csv_row(row)
+    assert normalized["segment"] == "equity"
+
+
+def test_missing_segment_column_falls_back_to_no_segment_key():
+    # Some broker exports (Kotak's, per the module docstring, unverified)
+    # may not carry a segment column at all - the caller falls back to
+    # derive_segment(exchange) whenever "segment" is absent.
+    row = {
+        "tradingsymbol": "RELIANCE",
+        "exchange": "NSE",
+        "trade_type": "buy",
+        "quantity": "10",
+        "price": "1400",
+        "order_id": "123",
+        "trade_id": "456",
+        "trade_date": "2026-01-05",
+        "order_execution_time": "2026-01-05T09:30:00",
+    }
+    normalized = _normalize_csv_row(row)
+    assert "segment" not in normalized
+
+
+def test_unrecognized_segment_code_is_dropped_not_guessed():
+    row = {
+        "symbol": "SOMEMF",
+        "exchange": "NSE",
+        "segment": "XYZ",
+        "trade_type": "buy",
+        "quantity": "1",
+        "price": "10",
+        "order_id": "1",
+        "trade_id": "2",
+        "trade_date": "2026-01-05",
+        "order_execution_time": "2026-01-05T09:30:00",
+    }
+    normalized = _normalize_csv_row(row)
+    assert "segment" not in normalized

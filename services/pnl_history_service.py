@@ -406,7 +406,14 @@ def import_trades_csv(api_key: str, rows: list[dict]) -> tuple[bool, dict, int]:
                     symbol=symbol,
                     exchange=exchange,
                     product=row.get("product"),
-                    segment=derive_segment(exchange),
+                    # A CSV that carries its own segment (e.g. Zerodha
+                    # Console's EQ/FO column, already mapped to VALID_SEGMENTS
+                    # by the REST resource) wins over the exchange guess -
+                    # Console sets exchange to the plain NSE/BSE code even for
+                    # F&O rows, which derive_segment alone would mis-tag as
+                    # equity. The daily capture job's own rows never carry a
+                    # "segment" key at all, so this is a no-op for that path.
+                    segment=row.get("segment") or derive_segment(exchange),
                     # Best-effort - a CSV row's orderid only matches the
                     # strategy book when it happens to be a real OpenAlgo
                     # order still within the order-tag's 30-day retention;

@@ -6,6 +6,69 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-09-14 — P&L History CSV import: F&O trades mis-tagged as equity segment
+
+**Branch:** `upgrade-main-2026-09` (direct fix, no sync involved).
+**Upstream issue/PR:** none - this whole subsystem is fork-only (see the
+2026-09-06 entry below), never filed upstream.
+**Verified in production:** confirmed the bug live on acc1 before fixing -
+queried `db/tradebook.db` directly and found all 1,606 rows from a real
+F&O tradebook CSV import tagged `segment='equity'`. Fix not yet deployed.
+
+### Problem
+
+`services/pnl_history_service.py::import_trades_csv` set
+`segment=derive_segment(exchange)` - deriving segment purely from the raw
+`exchange` column. Zerodha's real Console tradebook export sets
+`exchange=NSE`/`BSE` for F&O rows too (the actual EQ/FO distinction lives
+in a separate `segment` column the importer never read at all). Every
+F&O row therefore imported as `segment='equity'` - no error, the trades
+were just invisible under any F&O-filtered view and inflated the equity
+count instead. Reported by the user as "no error, but no uploaded data
+found" after importing a real F&O tradebook CSV on acc1.
+
+### Fix
+
+- `restx_api/pnl_history.py`: added `"segment"` to `_COLUMN_ALIASES` (reads
+  the CSV's own segment column) and a `_SEGMENT_ALIASES` map translating
+  Zerodha's raw codes (`EQ`, `FO`, confirmed against real files; `CD`,
+  `COM`, `MF` inferred, unverified) to this app's `VALID_SEGMENTS`. An
+  unrecognized or absent code is dropped rather than guessed, so the
+  caller falls back to the exact previous behavior
+  (`derive_segment(exchange)`) - this only ever *improves* on the old
+  guess, never overrides it with something worse.
+- `services/pnl_history_service.py`: `segment=row.get("segment") or
+  derive_segment(exchange)` - CSV-provided segment wins when present.
+- `test/test_pnl_history_csv_import.py` (new): regression test pinning the
+  exact bug (an F&O row with `exchange=NSE` must map to `segment=fno`,
+  not `equity`) plus the equity/missing-column/unrecognized-code cases.
+
+### Data repair (acc1 only - the only account this CSV was imported on)
+
+The 1,606 already-imported rows can't be fixed by re-uploading the same
+CSV after this patch - `import_trades_csv` dedupes on `tradeid` and skips
+rows that already exist rather than updating them. Repaired directly with
+a one-time `UPDATE`, using a heuristic confirmed safe against both real
+files: Zerodha F&O contract symbols always embed digits (`NIFTY2610625750PE`),
+real equity trading symbols never do (`RELIANCE`, `ONESOURCE`) - so
+`UPDATE tradebook_fills SET segment='fno' WHERE source='import' AND
+segment='equity' AND symbol GLOB '*[0-9]*'` retags only the mistagged F&O
+rows without touching the real equity import.
+
+### Batch upload (separate, related change bundled in the same commit)
+
+`frontend/src/pages/TradeBook.tsx`'s import dialog took one file at a
+time. Since a broker typically exports equity and F&O as two separate
+CSVs, changed the file input to `multiple` and upload sequentially (not
+combined into one backend request) - `import_trades_csv` commits an
+entire CSV as one transaction, so one bad row in a combined upload would
+roll back every file, not just the offending one. Per-file failures are
+isolated: successfully-imported files clear from the dialog, failed ones
+stay selected for retry. No backend/API change needed - `POST
+/api/v1/pnl/import` already only ever took one file.
+
+---
+
 ## 2026-09-08 — acc3 sync onto origin/main tip, for Kotak historical data (12 commits)
 
 **Branch:** `acc3-sync-2026-09-08` (from `main-sync-2026-09-05` @ `b9b0c15ccb`

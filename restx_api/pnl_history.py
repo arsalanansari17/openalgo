@@ -81,6 +81,28 @@ _COLUMN_ALIASES = {
     "trade_timestamp": ("timestamp", "trade_timestamp", "extm", "fill_timestamp"),
     "trade_date": ("trade_date",),
     "order_execution_time": ("order_execution_time",),
+    # Zerodha's Console export carries this directly ("EQ"/"FO"/...) - see
+    # _SEGMENT_ALIASES below for why this is preferred over guessing from
+    # exchange, which Console sets to the plain "NSE"/"BSE" exchange code
+    # for F&O rows too (confirmed against a real exported F&O tradebook
+    # CSV: every row had exchange=NSE, segment=FO - an equity-vs-F&O guess
+    # from exchange alone mis-tagged every options trade as equity).
+    "segment": ("segment",),
+}
+
+# Broker-CSV segment code -> this app's VALID_SEGMENTS (database/pnl_db.py).
+# Confirmed against a real Zerodha Console export for "EQ" and "FO" only;
+# the rest are inferred from Console's own segment picker (mirrored by
+# VALID_SEGMENTS itself) and not yet seen in a real file - an unrecognized
+# code is dropped by _normalize_csv_row so the caller falls back to
+# derive_segment(exchange) exactly as before this fix, rather than writing
+# a wrong segment with false confidence.
+_SEGMENT_ALIASES = {
+    "EQ": "equity",
+    "FO": "fno",
+    "CD": "currency",
+    "COM": "commodity",
+    "MF": "mutual_fund",
 }
 
 
@@ -125,6 +147,16 @@ def _normalize_csv_row(raw_row: dict) -> dict:
             normalized["trade_timestamp"] = trade_date
         elif order_time:
             normalized["trade_timestamp"] = order_time
+
+    raw_segment = str(normalized.get("segment", "")).strip().upper()
+    mapped_segment = _SEGMENT_ALIASES.get(raw_segment)
+    if mapped_segment:
+        normalized["segment"] = mapped_segment
+    else:
+        # Unrecognized or absent - don't write a guess under the "segment"
+        # key; import_trades_csv falls back to derive_segment(exchange)
+        # whenever this key is missing.
+        normalized.pop("segment", None)
 
     return normalized
 
