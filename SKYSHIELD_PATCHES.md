@@ -6,6 +6,147 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-09-15 — Fix: equity FIFO split a cross-exchange position into
+## phantom open positions; known limitation on corporate actions/off-market
+## credits
+
+**Branch:** `upgrade-main-2026-09`. Found continuing the F&O verification
+below into the equity side, same account (`UF2453`), same offline
+methodology.
+
+### The bug (fixed)
+
+`utils/pnl_fifo.py::compute_realized_pnl` grouped trades by `(symbol,
+exchange, product)`. For cash equity this is wrong: NSE and BSE are the
+same depository security under one ISIN, and it's routine to buy on one
+and sell on the other in the same demat account. Splitting them into
+separate FIFO queues produces phantom open positions and understated
+realized loss. Confirmed via ISIN cross-check (`AMARAJABAT` =
+`INE885A01032` on both the NSE-tagged and BSE-tagged rows) and a
+systematic scan of the account's full equity tradebook: 80 symbols traded
+across both exchanges, almost all with exact mirror-image per-exchange
+nets - real, routine cross-exchange trading, not a data artifact.
+
+**Fix:** grouping key is now `(symbol, product, grouping_exchange)`,
+where `grouping_exchange` is `None` (merged) when `segment == "equity"`,
+and the trade's real exchange otherwise. F&O stays segment-separated -
+NFO and BFO are different contracts, not one fungible instrument, so
+merging them would be wrong the way not-merging equity was. A
+missing/`None` segment (pre-migration rows) also keeps exchange in the
+key - the conservative default. `services/pnl_history_service.py` now
+passes `segment` through to the trade dicts it hands to
+`compute_realized_pnl`; `RealizedLot`/`OpenPosition` still report each
+fill's own real exchange, not a merged placeholder. Tests:
+`test/test_pnl_fifo.py`.
+
+**Quantified impact** (dry run against `UF2453`'s full equity tradebook,
+7,354 rows, offline, no VM involved): before the fix, 479 phantom open
+positions and realized P&L of -135,294.50; after, 130 open positions and
+realized P&L of -234,272.13 - ₹98,977.62 more realized loss than the
+buggy grouping reported. Verified the fix is correct by checking which
+symbols the corrected run leaves open against the account holder's actual
+current holdings (MINDACORP, CAPLIPOINT, WELCORP, CYIENT, ENGINERSIN,
+IDEAFORGE) - all 6 appear, and none of the wrongly-still-open symbols the
+buggy version produced do.
+
+### Known limitation (not fixed, deferred - same class as the F&O expiry
+### gap above)
+
+The corrected run still leaves 8 symbols open that are **not** real
+current holdings (`ANTHEM`, `BILNCD2021`, `EASEMYTRIP`, `IRFC`, `RPEL`,
+`TATASTEEL`, `TATASTLBSL`, `ZOMATO`). These are not a grouping bug -
+they're real shares entering or multiplying in the demat through events
+that never produce a tradebook row:
+
+- **Off-market credits with no buy trade at all** - `IDEAFORGE` (ESOP
+  exercise/IPO allotment, confirmed with the user: ~10,000 of ~10,085
+  shares sold have no corresponding buy trade anywhere in the tradebook)
+  and `ANTHEM` (single sell, zero buys). Zerodha's own Tax P&L engine
+  knows the real acquisition cost internally; the tradebook export never
+  carries it.
+- **Bonus issues that double the sellable quantity** - `RPEL` (bought 6,
+  sold 12, single exchange) and `EASEMYTRIP` (bought 1,206 on NSE, sold
+  2,412 on BSE - a bonus *and* the cross-exchange case compounding on one
+  symbol).
+- **Symbol renames** - `ZOMATO` traded under the old ticker before the
+  2025 rename to Eternal Ltd (`ETERNAL`, same ISIN `INE758T01015`); our
+  tradebook rows use whichever ticker was live at trade time, so the two
+  never join as one FIFO position. (This confirms the user's original
+  hypothesis for the equity mismatch - just for `ZOMATO`, not for the
+  `AMARAJABAT` case that triggered the investigation, which was
+  cross-exchange, not a rename.)
+- **Bond/NCD redemption** - `BILNCD2021`, a redeemed bond credit with no
+  buy trade, same shape as the ESOP cases but not an equity corporate
+  action per se.
+
+Fixing this properly needs a corporate-actions/off-market-transfer data
+source (splits, bonuses, ESOP/IPO allotments, renames, redemptions) -
+nothing in the codebase has one today, same scope problem as the F&O
+expiry-settlement gap below. Logged here rather than attempted, per this
+project's "defer non-urgent findings" convention.
+
+---
+
+## 2026-09-14 — Verified: FIFO P&L logic is correct; known limitation on
+## expiry settlements that never appear as a Tradebook row
+
+**Not a patch** - a verification exercise plus one deferred, documented
+limitation. Prompted by the user's real F&O CSV import (see the entry
+below) not matching a Zerodha Tax P&L report they downloaded separately.
+
+### What was checked
+
+Reconstructed `utils/pnl_fifo.py::compute_realized_pnl` output entirely
+offline against `tradebook-UF2453-FO (2020/2021/2022/2024/2025/2026).csv`
+(no 2023 file - confirmed with the user: no F&O trading that year) and
+compared the total to a real Zerodha Tax P&L export covering
+2019-05-01 to 2026-09-14 (`Realized P&L: -467,125.25`, gross of
+charges - Zerodha lists charges as a separate line item, never netted
+into this figure, matching what the user wanted to compare against).
+
+### Findings
+
+1. **Our FIFO logic is correct.** Per-symbol reconciliation against
+   Zerodha's own detail sheet (Buy Value/Sell Value/Open Quantity per
+   contract) found 31 symbols, all from the 2024 CSV, each missing
+   exactly one leg (the entry or the exit trade present, never both).
+   Excluding those 31 symbols from both totals brought our FIFO result
+   to within **Rs.90 on ~Rs.450,000 (0.02%)** of Zerodha's own number -
+   confirming the matching logic itself, once given the same trades
+   Zerodha used, produces the same answer.
+2. **Root cause of the 31-symbol gap: not a broken export.** Checked
+   against a screenshot of Zerodha Console's own Tradebook UI for the
+   same 2024/F&O/full-year filter - it reports the identical row count
+   (1,750) our CSV has, so the file isn't missing anything Zerodha's own
+   UI would show either. Tracing one symbol
+   (`MIDCPNIFTY2472212475PE`) confirmed the real shape: three SELL rows
+   opening a short on its own 0DTE expiry day, no BUY row anywhere -
+   Zerodha's Tax P&L nonetheless shows a Buy Value (implied cover price
+   ~62.2, well above the ~32-60 it was sold at, matching the loss Tax
+   P&L reports). This is an options position auto-squared-off/settled by
+   the exchange at/near expiry - a real closing transaction that
+   Zerodha's Tax P&L engine has visibility into (it can price it off the
+   settlement price) but which never lands as a row in the regular
+   Tradebook, cash-settled OTM expiries most commonly, ITM
+   auto-square-offs sometimes too. **Re-downloading the CSV will not
+   close this gap** - the data genuinely isn't in the Tradebook export at
+   all, confirmed independently by the Console UI's own row count.
+3. **Real limitation, deferred, not urgent to fix:** `PnlTrade` has no
+   `expiry_date` column (see `database/pnl_db.py`) and neither the CSV
+   import path nor the daily capture job (`services/pnl_capture_service.py`)
+   has any source for exchange settlement prices - only broker-tradebook
+   trades. Closing this gap for real would need a genuinely new data
+   source (a settlement-price feed per contract/expiry) to synthesize the
+   missing closing trade, not just a schema change - meaningfully more
+   work than the CSV-column fixes done elsewhere in this file, and out of
+   scope for what prompted this investigation. Logged here rather than
+   attempted, per this project's "defer non-urgent findings" convention.
+   A book with more contracts settling via exchange auto square-off
+   (vs. manually exited by the trader) will see a larger gap between our
+   FIFO number and Zerodha's own Tax P&L than this one did.
+
+---
+
 ## 2026-09-14 — P&L History CSV import: F&O trades mis-tagged as equity segment
 
 **Branch:** `upgrade-main-2026-09` (direct fix, no sync involved).

@@ -167,6 +167,7 @@ def get_pnl_history(
                 "symbol": row.symbol,
                 "exchange": row.exchange,
                 "product": row.product,
+                "segment": row.segment,
                 "action": row.action,
                 "quantity": row.quantity,
                 "average_price": row.average_price,

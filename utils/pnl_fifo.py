@@ -70,10 +70,23 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
     Each ``trades`` item is a dict with at minimum: ``symbol``, ``exchange``,
     ``action`` ("BUY"/"SELL"), ``quantity``, ``average_price``,
     ``trade_timestamp`` (sortable - a datetime or ISO string), and
-    optionally ``product``. Trades are grouped by (symbol, exchange,
-    product) and matched independently within each group - a MIS trade and
-    a CNC trade in the same symbol are different positions, not one FIFO
-    queue, matching how the broker itself carries them.
+    optionally ``product`` and ``segment``. Trades are grouped by (symbol,
+    product, grouping exchange) and matched independently within each
+    group - a MIS trade and a CNC trade in the same symbol are different
+    positions, not one FIFO queue, matching how the broker itself carries
+    them.
+
+    For ``segment == "equity"``, exchange is dropped from the grouping key:
+    NSE and BSE are the same depository security (one ISIN) for cash
+    equity, and it's routine to buy on one and sell on the other within the
+    same demat account - splitting them into separate FIFO queues produces
+    phantom open positions (verified against a real account's Zerodha Tax
+    P&L export: ~80 symbols traded cross-exchange, all fungible by ISIN).
+    F&O is not merged - NFO and BFO are different contracts, not the same
+    fungible instrument, so exchange stays in the key there. A missing/None
+    segment (pre-migration rows) also keeps exchange in the key, the
+    conservative default. Individual realized lots and open positions still
+    report the fill's own actual exchange, not a merged placeholder.
 
     Order within a group matters for FIFO correctness: trades are sorted by
     ``trade_timestamp`` before matching, so callers do not need to
@@ -84,12 +97,14 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
     """
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for trade in trades:
-        key = (trade.get("symbol"), trade.get("exchange"), trade.get("product"))
+        exchange = trade.get("exchange")
+        grouping_exchange = None if trade.get("segment") == "equity" else exchange
+        key = (trade.get("symbol"), trade.get("product"), grouping_exchange)
         groups[key].append(trade)
 
     result = FifoResult()
 
-    for (symbol, exchange, product), group_trades in groups.items():
+    for (symbol, product, _grouping_exchange), group_trades in groups.items():
         ordered = sorted(
             enumerate(group_trades),
             key=lambda pair: (_sort_timestamp(pair[1].get("trade_timestamp")), pair[0]),
@@ -107,6 +122,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
             qty = float(trade.get("quantity") or 0)
             price = float(trade.get("average_price") or 0)
             ts = trade.get("trade_timestamp")
+            fill_exchange = trade.get("exchange")
 
             if qty <= 0:
                 continue
@@ -122,7 +138,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                     result.realized_lots.append(
                         RealizedLot(
                             symbol=symbol,
-                            exchange=exchange,
+                            exchange=open_fill["exchange"],
                             product=product,
                             entry_action="SELL",
                             quantity=matched,
@@ -138,7 +154,9 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                     if open_fill["quantity"] <= 1e-9:
                         short_queue.popleft()
                 if remaining > 1e-9:
-                    long_queue.append({"price": price, "quantity": remaining, "timestamp": ts})
+                    long_queue.append(
+                        {"price": price, "quantity": remaining, "timestamp": ts, "exchange": fill_exchange}
+                    )
 
             elif action == "SELL":
                 remaining = qty
@@ -149,7 +167,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                     result.realized_lots.append(
                         RealizedLot(
                             symbol=symbol,
-                            exchange=exchange,
+                            exchange=open_fill["exchange"],
                             product=product,
                             entry_action="BUY",
                             quantity=matched,
@@ -165,14 +183,16 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                     if open_fill["quantity"] <= 1e-9:
                         long_queue.popleft()
                 if remaining > 1e-9:
-                    short_queue.append({"price": price, "quantity": remaining, "timestamp": ts})
+                    short_queue.append(
+                        {"price": price, "quantity": remaining, "timestamp": ts, "exchange": fill_exchange}
+                    )
 
         for open_fill in long_queue:
             if open_fill["quantity"] > 1e-9:
                 result.open_positions.append(
                     OpenPosition(
                         symbol=symbol,
-                        exchange=exchange,
+                        exchange=open_fill["exchange"],
                         product=product,
                         action="BUY",
                         quantity=open_fill["quantity"],
@@ -184,7 +204,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                 result.open_positions.append(
                     OpenPosition(
                         symbol=symbol,
-                        exchange=exchange,
+                        exchange=open_fill["exchange"],
                         product=product,
                         action="SELL",
                         quantity=open_fill["quantity"],
