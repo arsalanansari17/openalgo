@@ -6,6 +6,69 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-09-21 — Fix: FIFO keyed on product left imported-then-captured
+## holdings unmatched (MINDACORP / WELCORP)
+
+**Branch:** `upgrade-main-2026-09` (direct fix, no sync involved).
+**Upstream issue/PR:** none - fork-only subsystem (see 2026-09-06 entry).
+**Verified in production:** row-level on acc1's `db/tradebook.db`, read-only.
+
+### Problem
+
+`utils/pnl_fifo.py::compute_realized_pnl` grouped fills by `(symbol,
+product, exchange)`. A Console CSV import stores `product=None` (the export
+has no product column) while the daily capture job stores the real product
+(`CNC`/`MIS`/`NRML`). A holding bought before live capture began and sold
+after it therefore split across two groups that never met:
+
+- MINDACORP: 117 bought 2026-05-26 (import, `None`), 117 sold 2026-09-15
+  (capture, `CNC`).
+- WELCORP: 72 bought 2026-08-21 (import, `None`), 72 sold 2026-09-15
+  (capture, `CNC`).
+
+The sells were read as brand-new shorts (117 and 72 unmatched) and the buys
+stayed open, so the P&L was never booked. Zerodha Console matches per symbol
+regardless of product.
+
+### Fix
+
+`utils/pnl_fifo.py`: grouping key is now `(symbol, grouping_exchange)`;
+product is no longer part of it. Each queued fill remembers its own product
+and `RealizedLot` / `OpenPosition` report the entry fill's product. Equity
+still merges NSE/BSE and F&O still keeps exchange in the key (2026-09-15
+entry). Tests in `test/test_pnl_fifo.py`: import-`None` buy vs captured-`CNC`
+sell matches, F&O MIS/NRML of one symbol matches, open positions keep their
+own product, different symbols stay separate.
+
+### Verified before shipping (old vs new matcher on acc1's live ledger)
+
+| Range / segment | Old | New |
+|---|---|---|
+| F&O 09-01..09-20 | -4,145.25 | -4,145.25 (unchanged, equals Zerodha xlsx) |
+| F&O 09-01..09-21 | -2,390.25 | -2,390.25 (unchanged) |
+| Equity 09-01..09-20 | +20,698.75 | +35,409.36 |
+| Equity 09-01..09-21 | +20,698.75 | +37,549.51 |
+
+Only MINDACORP (0 -> +9,577.00) and WELCORP (0 -> +5,133.61) changed for
+09-01..09-20; the further +2,140.15 through 09-21 is a holding sold on
+09-21 (CYIENT). Open positions fall (equity 163 -> 138). The earlier
+offline run of the real F&O CSV, which carries no product and so was
+already matched per symbol, agreed with Zerodha's xlsx on all 42 symbols.
+
+### Known limitation (unchanged)
+
+Symbol format still differs between imported (`NIFTY2690823500PE`) and
+captured (`NIFTY08SEP2623500PE`) F&O rows, so an F&O position spanning the
+import/capture boundary still cannot match. Not affected by this change.
+
+### Deploy note
+
+Reads compute P&L on every request, so no data repair is needed - but the
+running OpenAlgo service must be restarted (or the VM rebooted) to load the
+new matcher.
+
+---
+
 ## 2026-09-21 — P&L History CSV import: F&O rows stored with exchange NSE/BSE
 ## instead of NFO/BFO
 

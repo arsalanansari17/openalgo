@@ -118,7 +118,7 @@ def _parse_range_and_build_query(
         # FIFO matching specifically because exchange - and therefore
         # segment, which is a pure function of it - is already part of the
         # FIFO grouping key (utils/pnl_fifo.py groups by
-        # symbol+exchange+product); for get_pnl_trades it's just a plain row
+        # symbol+exchange); for get_pnl_trades it's just a plain row
         # filter with no matching involved at all.
         query = query.filter(PnlTrade.segment == segment)
     if strategy:

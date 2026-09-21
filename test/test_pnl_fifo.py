@@ -92,3 +92,59 @@ def test_same_exchange_equity_matching_unaffected_by_the_fix():
     assert len(result.realized_lots) == 1
     assert result.realized_lots[0].realized_pnl == 50.0
     assert result.open_positions == []
+
+
+# --- Product is not part of the grouping key (SKYSHIELD_PATCHES.md, 2026-09-21) ---
+
+
+def test_imported_buy_without_product_matches_captured_cnc_sell():
+    # MINDACORP on acc1: bought via a Console CSV import (no product column,
+    # stored as None), sold later by the bot and captured live as CNC. Keyed
+    # on product these never met: the sell became a phantom short and the
+    # P&L was never booked.
+    trades = [
+        _trade("BUY", 117, 595.83, "2026-05-26T10:00:00", product=None, symbol="MINDACORP"),
+        _trade("SELL", 117, 677.68, "2026-09-15T15:13:00", product="CNC", symbol="MINDACORP"),
+    ]
+    result = compute_realized_pnl(trades)
+
+    assert result.open_positions == []
+    assert len(result.realized_lots) == 1
+    assert round(result.total_realized_pnl, 2) == round((677.68 - 595.83) * 117, 2)
+    # The lot reports the entry fill's own product, not a merged placeholder.
+    assert result.realized_lots[0].product is None
+
+
+def test_fno_mis_and_nrml_fills_of_one_symbol_match_per_symbol():
+    # Zerodha's statement is per symbol: NIFTY08SEP2623550PE traded as MIS and
+    # NRML shows one row. A buy under one product closed by a sell under the
+    # other is still one position.
+    trades = [
+        _trade("BUY", 65, 10.0, "2026-09-07T09:30:00", exchange="NFO", segment="fno", product="NRML",
+               symbol="NIFTY08SEP2623550PE"),
+        _trade("SELL", 65, 14.0, "2026-09-08T09:30:00", exchange="NFO", segment="fno", product="MIS",
+               symbol="NIFTY08SEP2623550PE"),
+    ]
+    result = compute_realized_pnl(trades)
+
+    assert result.open_positions == []
+    assert result.total_realized_pnl == (14.0 - 10.0) * 65
+
+
+def test_open_position_reports_its_own_product():
+    trades = [_trade("BUY", 10, 100.0, "2026-01-01T09:00:00", product="CNC")]
+    result = compute_realized_pnl(trades)
+
+    assert len(result.open_positions) == 1
+    assert result.open_positions[0].product == "CNC"
+
+
+def test_different_symbols_are_still_separate_positions():
+    trades = [
+        _trade("BUY", 10, 100.0, "2026-01-01T09:00:00", symbol="AAA"),
+        _trade("SELL", 10, 110.0, "2026-01-02T09:00:00", symbol="BBB"),
+    ]
+    result = compute_realized_pnl(trades)
+
+    assert result.realized_lots == []
+    assert len(result.open_positions) == 2
