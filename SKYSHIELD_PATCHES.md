@@ -6,6 +6,66 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-09-21 — P&L History CSV import: F&O rows stored with exchange NSE/BSE
+## instead of NFO/BFO
+
+**Branch:** `upgrade-main-2026-09` (direct fix, no sync involved).
+**Upstream issue/PR:** none - fork-only subsystem (see 2026-09-06 entry).
+**Verified in production:** read-only audit of acc1's `db/tradebook.db`:
+6,133 imported F&O rows with `exchange='NSE'` (2020-07-06 to 2026-09-01) and
+352 with `exchange='BSE'` (2024-07-12 to 2026-09-03); the 124 captured F&O
+rows already carry `NFO`/`BFO`.
+
+### Problem
+
+Zerodha Console's tradebook export labels F&O rows with the underlying's
+exchange (`NSE` for NIFTY, `BSE` for SENSEX) - same quirk as the 2026-09-14
+segment entry. The importer stored that raw value, while the daily capture
+job stores the broker feed's `NFO`/`BFO`. The P&L History Scrip-wise table
+therefore showed `NSE`/`BSE` beside `NFO`/`BFO` inside one F&O segment view.
+Cosmetic for totals: reports filter on the `segment` column (set from the
+CSV's own segment field), not exchange, and every imported row for a given
+contract shares one exchange, so FIFO grouping was unaffected. Verified on
+the real F&O CSV: Sep 1-20 realized stays -4,145.25 before and after.
+
+### Fix
+
+- `database/pnl_db.py`: `normalize_fno_exchange(segment, exchange)` maps
+  `NSE -> NFO` and `BSE -> BFO` for `segment == 'fno'` only; every other
+  segment/exchange passes through (cash equity really is on NSE/BSE). Built
+  from `utils.constants` like the existing segment map.
+- `services/pnl_history_service.py::import_trades_csv`: stores
+  `normalize_fno_exchange(segment, exchange)`. **`make_dedup_key` still
+  receives the raw CSV exchange on purpose** - composite keys (rows without
+  a tradeid) were hashed with NSE/BSE, so hashing the mapped value would make
+  a re-upload of an already-imported CSV double-count. Checked end to end:
+  importing the real F&O CSV twice into a scratch DB imports 133 then skips
+  133.
+- `test/test_pnl_history_csv_import.py`: three tests for the mapping.
+- Not touched: symbol format (imported `NIFTY2690123900PE` vs captured
+  `NIFTY01SEP2623900PE`) and the missing product on imported rows - the
+  known import/capture-boundary limitation, to be handled with the equity
+  product-key fix, not here.
+
+### Data repair (per VM - back up `db/tradebook.db` first)
+
+Re-uploading cannot fix existing rows (`import_trades_csv` skips rows it
+already has). Audit first, then update only imported F&O rows:
+
+```sql
+SELECT segment, exchange, source, COUNT(*) FROM tradebook_fills
+ WHERE segment='fno' GROUP BY 1,2,3;
+UPDATE tradebook_fills SET exchange='NFO'
+ WHERE source='import' AND segment='fno' AND exchange='NSE';
+UPDATE tradebook_fills SET exchange='BFO'
+ WHERE source='import' AND segment='fno' AND exchange='BSE';
+```
+
+`dedup_key` is a stored column and is not recomputed, so existing keys stay
+valid.
+
+---
+
 ## 2026-09-15 — Fix: equity FIFO split a cross-exchange position into
 ## phantom open positions; known limitation on corporate actions/off-market
 ## credits

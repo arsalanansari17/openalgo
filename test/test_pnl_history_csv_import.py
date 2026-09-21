@@ -87,3 +87,31 @@ def test_unrecognized_segment_code_is_dropped_not_guessed():
     }
     normalized = _normalize_csv_row(row)
     assert "segment" not in normalized
+
+
+def test_fno_row_labelled_nse_or_bse_is_stored_as_nfo_or_bfo():
+    # Console labels a NIFTY option NSE and a SENSEX option BSE; the capture
+    # job stores NFO/BFO, so the import must store the same for one segment
+    # to show one set of exchanges.
+    from database.pnl_db import normalize_fno_exchange
+
+    assert normalize_fno_exchange("fno", "NSE") == "NFO"
+    assert normalize_fno_exchange("fno", "BSE") == "BFO"
+
+
+def test_fno_exchange_already_derivatives_or_unknown_is_unchanged():
+    from database.pnl_db import normalize_fno_exchange
+
+    assert normalize_fno_exchange("fno", "NFO") == "NFO"
+    assert normalize_fno_exchange("fno", "BFO") == "BFO"
+    assert normalize_fno_exchange("fno", "MCX") == "MCX"
+    assert normalize_fno_exchange("fno", None) is None
+
+
+def test_non_fno_segments_keep_their_exchange():
+    # Cash equity really is on NSE/BSE - only F&O rows are relabelled.
+    from database.pnl_db import normalize_fno_exchange
+
+    assert normalize_fno_exchange("equity", "NSE") == "NSE"
+    assert normalize_fno_exchange("equity", "BSE") == "BSE"
+    assert normalize_fno_exchange(None, "NSE") == "NSE"

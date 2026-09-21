@@ -22,6 +22,7 @@ from database.pnl_db import (
     db_session,
     derive_segment,
     make_dedup_key,
+    normalize_fno_exchange,
     parse_trade_timestamp,
 )
 from database.strategy_book_db import StrategyBookUnavailable, get_order_tag
@@ -399,22 +400,27 @@ def import_trades_csv(api_key: str, rows: list[dict]) -> tuple[bool, dict, int]:
                 skipped_duplicate += 1
                 continue
 
+            # A CSV that carries its own segment (e.g. Zerodha Console's
+            # EQ/FO column, already mapped to VALID_SEGMENTS by the REST
+            # resource) wins over the exchange guess - Console sets exchange
+            # to the plain NSE/BSE code even for F&O rows, which
+            # derive_segment alone would mis-tag as equity. The daily capture
+            # job's own rows never carry a "segment" key at all, so this is
+            # a no-op for that path.
+            segment = row.get("segment") or derive_segment(exchange)
+
             db_session.add(
                 PnlTrade(
                     dedup_key=dedup_key,
                     tradeid=row.get("tradeid") or None,
                     orderid=row.get("orderid") or None,
                     symbol=symbol,
-                    exchange=exchange,
+                    # Stored as NFO/BFO for an F&O row Console labelled
+                    # NSE/BSE, matching what the capture job stores. The
+                    # dedup key above deliberately keeps the raw exchange.
+                    exchange=normalize_fno_exchange(segment, exchange),
                     product=row.get("product"),
-                    # A CSV that carries its own segment (e.g. Zerodha
-                    # Console's EQ/FO column, already mapped to VALID_SEGMENTS
-                    # by the REST resource) wins over the exchange guess -
-                    # Console sets exchange to the plain NSE/BSE code even for
-                    # F&O rows, which derive_segment alone would mis-tag as
-                    # equity. The daily capture job's own rows never carry a
-                    # "segment" key at all, so this is a no-op for that path.
-                    segment=row.get("segment") or derive_segment(exchange),
+                    segment=segment,
                     # Best-effort - a CSV row's orderid only matches the
                     # strategy book when it happens to be a real OpenAlgo
                     # order still within the order-tag's 30-day retention;

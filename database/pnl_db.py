@@ -182,12 +182,36 @@ try:
         EXCHANGE_NCDEX: "commodity",
         EXCHANGE_NCO: "commodity",  # "NSE Commodities (futures + options)" - commodity segment despite the name
     }
+    # Zerodha Console's tradebook export labels F&O rows with the underlying's
+    # exchange (NSE for NIFTY, BSE for SENSEX) rather than the derivatives
+    # exchange the broker feed reports - see normalize_fno_exchange().
+    _CONSOLE_FNO_EXCHANGE_MAP = {EXCHANGE_NSE: EXCHANGE_NFO, EXCHANGE_BSE: EXCHANGE_BFO}
 except ImportError:
     # utils.constants is part of this same codebase and always importable in
     # practice; guarded only so a database-layer module never hard-fails
     # over an import from an unrelated package.
     logger.exception("utils.constants unavailable - segment derivation disabled")
     _EXCHANGE_SEGMENT_MAP = {}
+    _CONSOLE_FNO_EXCHANGE_MAP = {}
+
+
+def normalize_fno_exchange(segment, exchange):
+    """Exchange to store for a row: NFO/BFO for an F&O row that a Zerodha
+    Console CSV labelled NSE/BSE, otherwise the exchange unchanged.
+
+    The daily capture job stores the broker feed's own NFO/BFO, so without
+    this an imported and a captured F&O row disagree on exchange and the
+    Scrip-wise report shows NSE/BSE beside NFO/BFO for the same segment.
+    Segment (not exchange) is what filters a report, so this changes only
+    the displayed/stored exchange, never which rows a segment view includes.
+
+    Store-time only: make_dedup_key must still be fed the raw CSV exchange,
+    or a re-upload of an already-imported CSV would stop deduping against
+    the existing rows that were hashed with NSE/BSE.
+    """
+    if segment != "fno":
+        return exchange
+    return _CONSOLE_FNO_EXCHANGE_MAP.get((exchange or "").strip(), exchange)
 
 
 def derive_segment(exchange):
