@@ -6,6 +6,46 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-09-27 — Sync onto origin/main 2.0.2.6 (105 commits), branch `upgrade-main-2026-09-27`
+
+Merged `origin/main` (`e78f2edee`, platform 2.0.2.4 -> 2.0.2.6: openalgo-charts
+2.1.8 -> 2.5.0, OpenScript studies/strategies, chart alerts, agent module,
+Zerodha MCX units, Kotak history/quotes fixes) into `upgrade-main-2026-09`.
+
+**Impact check (Step 0):** Zerodha `funds.py` `availablecash` untouched upstream
+(only an MCX unrealised-P&L multiplier); Zerodha MCX quantity conversion is a
+no-op outside MCX (`_resolve_size` returns 1), so NFO orders/margin/positions
+are unchanged. Kotak: quotes endpoint now gated on concurrency with 429 retry,
+index feed subscribes by Kotak's index name, carried-forward positions valued
+at cost. New deps in `requirements-nginx.txt`: `openscript==0.5.0`,
+`litellm==1.99.0`, `agno==3.0.5`, `ddgs>=9.16.0`. New migration
+`upgrade/migrate_alert_log.py`.
+
+**Conflicts (7 source files):** 6 were whole-file conflicts caused only by
+CRLF/LF differences between the two sides; a three-way merge with line endings
+normalised merged 5 of them cleanly. Real resolutions:
+- `broker/zerodha/api/funds.py` — upstream version + our `live_balance`
+  availablecash patch (2026-08-23 entry) re-applied.
+- `broker/kotak/streaming/kotak_adapter.py` — kept both module-level blocks:
+  our eventlet `_real_threading` patch (Kotak #1421 counterpart) and upstream's
+  new `_INDEX_NAMES` map.
+- INDIAVIX names: our patch had `["INDIA VIX", "India VIX"]` in
+  `broker/kotak/api/data.py`; upstream's new streaming copy has
+  `["India VIX"]` and a test (`test_the_rest_map_and_the_feed_map_have_not_drifted`)
+  that fails on any difference. Both maps now carry `["India VIX", "INDIA VIX"]`
+  (upstream's spelling first, which is what the feed subscribes with; REST tries
+  both). We observed "INDIA VIX" resolving where "India VIX" did not (2026-08);
+  upstream observed the reverse for quotes — trying both covers either.
+- `frontend/dist/` — 333 conflicted build artifacts discarded and rebuilt from
+  the merged source (`npm run build`, bundle `index-BciZzTK_.js`).
+
+**Verification:** every line our fork added (vs the merge-base) was checked for
+presence in the merged result across all 11 files changed on both sides — none
+lost except the deliberate INDIAVIX rewrite. Kotak + Zerodha broker tests:
+368 passed after the INDIAVIX alignment (1 drift-test failure before it).
+
+---
+
 ## 2026-09-21 — Fix: FIFO keyed on product left imported-then-captured
 ## holdings unmatched (MINDACORP / WELCORP)
 
