@@ -6,6 +6,32 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-09-28 — Zerodha funds: also return Kite's `opening_balance` (`openingbalance`)
+
+**File:** `broker/zerodha/api/funds.py` (`get_margin_data`), additive only.
+
+**Problem:** `availablecash` is Kite's `live_balance`, which Kite reduces by only
+the *cash share* of the margin in use — Zerodha takes margin 50:50 from cash and
+collateral (and credits option premium to cash). So a caller cannot rebuild the
+account's total or free margin from the five returned fields once positions are
+open: `availablecash + collateral + utiliseddebits` double-counts the collateral
+half. Seen live 2026-09-28 on acc1 with an overnight NRML iron fly open: that
+formula gave total 9,66,741 / free 8,33,877 vs Kite's real 8,92,408 / 7,59,544.
+
+**Fix:** add `openingbalance` = sum of `available.opening_balance` (equity +
+commodity), which is static intraday. Then `total = openingbalance + collateral`
+and `free = total - utiliseddebits` = Kite's "Available margin" exactly (verified
+against the Funds page: 3,83,115.90 + 5,09,292 − 1,32,863.60 = 7,59,544). The
+key is omitted, not zeroed, if Kite leaves `opening_balance` out.
+
+**Consumer:** SkyShieldAT `utils.account_capital()` (09:15 capital plan and
+entry-time sizing for IC re-entry / ExpiryEve), with a fallback to
+`availablecash + collateral + utiliseddebits/2` when the field is absent.
+
+**Upstream:** PR to marketcalls/openalgo (additive field, no change to existing keys).
+
+---
+
 ## 2026-09-27 — Sync onto origin/main 2.0.2.6 (105 commits), branch `upgrade-main-2026-09-27`
 
 Merged `origin/main` (`e78f2edee`, platform 2.0.2.4 -> 2.0.2.6: openalgo-charts

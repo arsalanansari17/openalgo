@@ -152,6 +152,26 @@ def get_margin_data(auth_token):
             "m2mrealized": f"{total_realised:.2f}",
             "utiliseddebits": f"{total_used_margin:.2f}",
         }
+
+        # Kite's start-of-day cash balance. It does not move intraday, unlike
+        # live_balance ("availablecash" above), which Kite reduces by only the
+        # cash share of the margin in use (Zerodha takes margin 50:50 from cash
+        # and collateral), so availablecash + collateral + utiliseddebits
+        # overstates the account once positions are open. With this field a
+        # caller gets Kite's own figures exactly:
+        #   total capital    = openingbalance + collateral
+        #   available margin = openingbalance + collateral - utiliseddebits
+        # (verified against Kite's Funds page: 3,83,115.90 + 5,09,292 -
+        # 1,32,863.60 = 7,59,544 "Available margin"). Left out, not zeroed, if
+        # Kite ever omits it, so callers can tell "missing" from "zero".
+        opening_parts = [
+            margin_data["data"].get(seg, {}).get("available", {}).get("opening_balance")
+            for seg in ("equity", "commodity")
+        ]
+        if any(v is not None for v in opening_parts):
+            processed_margin_data["openingbalance"] = (
+                f"{sum(_to_float(v) for v in opening_parts if v is not None):.2f}"
+            )
         return processed_margin_data
     except KeyError:
         # Return an empty dictionary in case of unexpected data structure
