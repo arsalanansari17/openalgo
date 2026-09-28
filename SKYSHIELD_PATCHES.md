@@ -28,7 +28,7 @@ key is omitted, not zeroed, if Kite leaves `opening_balance` out.
 entry-time sizing for IC re-entry / ExpiryEve), with a fallback to
 `availablecash + collateral + utiliseddebits/2` when the field is absent.
 
-**Upstream:** PR to marketcalls/openalgo (additive field, no change to existing keys).
+**Upstream:** issue https://github.com/marketcalls/openalgo/issues/2137 (proposes availablecash = live_balance + this field; upstream's availablecash = net + debits - collateral already equals opening_balance, so the field alone adds little there). PR to follow if accepted.
 
 ---
 
