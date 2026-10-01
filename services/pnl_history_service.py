@@ -13,7 +13,7 @@ extended from one trading day to an arbitrary date range.
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from database.auth_db import get_auth_token_broker
 from database.pnl_db import (
@@ -27,6 +27,7 @@ from database.pnl_db import (
     parse_trade_timestamp,
 )
 from database.strategy_book_db import StrategyBookUnavailable, get_order_tag
+from utils.kotak_statement import normalize_company_name, normalize_statement_row
 from utils.logging import get_logger
 from utils.pnl_fifo import compute_realized_pnl, summarize_by_day
 
@@ -366,15 +367,109 @@ def import_trades_csv(api_key: str, rows: list[dict]) -> tuple[bool, dict, int]:
     if not auth_token:
         return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
 
+    return _persist_import_rows(rows)
+
+
+def _statement_equity_resolver():
+    """Build ``resolve(company_name, exchange) -> symbol | None`` from the
+    symbol master: the one symbol whose master name equals the statement's
+    company name once both are normalized, else None (never a guess)."""
+    from database.symbol import SymToken
+
+    by_exchange = {}
+
+    def resolve(company_name, exchange):
+        if exchange not in by_exchange:
+            index = {}
+            for symbol, name in (
+                SymToken.query.with_entities(SymToken.symbol, SymToken.name)
+                .filter(SymToken.exchange == exchange, SymToken.instrumenttype == "EQ")
+                .all()
+            ):
+                index.setdefault(normalize_company_name(name), set()).add(symbol)
+            by_exchange[exchange] = index
+        matches = by_exchange[exchange].get(normalize_company_name(company_name), set())
+        return next(iter(matches)) if len(matches) == 1 else None
+
+    return resolve
+
+
+def import_kotak_statement(api_key: str, raw_rows: list[dict]) -> tuple[bool, dict, int]:
+    """Backfill the ledger from a Kotak "Transaction Statement" CSV (see
+    utils/kotak_statement.py for the format and how it differs from the
+    Zerodha tradebook).
+
+    Two safeguards the Zerodha path doesn't need:
+
+    - The account's broker must be Kotak. A statement is only meaningful for
+      the Kotak account it was exported from; sending it to a Zerodha account
+      would write another person's trades into that ledger.
+    - Days the daily capture job already holds are skipped. The statement has
+      no trade ids and one line per order (the capture stores individual
+      fills), so an overlapping day cannot be deduplicated and would be
+      double-counted. Only days the capture never saw are imported.
+    """
+    auth_token, broker = get_auth_token_broker(api_key)
+    if not auth_token:
+        return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+    if (broker or "").lower() != "kotak":
+        return (
+            False,
+            {
+                "status": "error",
+                "message": f"This is a Kotak statement but this account's broker is "
+                f"'{broker}'. Upload it to the Kotak account it was exported from.",
+            },
+            400,
+        )
+
+    resolve_equity = _statement_equity_resolver()
+    rows = []
+    rejected = {}
+    unresolved = set()
+    for raw in raw_rows:
+        row, reason = normalize_statement_row(raw, resolve_equity)
+        if row is None:
+            rejected[reason] = rejected.get(reason, 0) + 1
+            if reason == "unresolved_symbol":
+                unresolved.add((raw.get("Security Name") or "").strip())
+            continue
+        rows.append(row)
+
+    success, body, status = _persist_import_rows(rows, skip_days_with_capture=True)
+    if success:
+        body["data"]["skipped_invalid"] += sum(rejected.values())
+        if rejected:
+            body["data"]["rejected_reasons"] = rejected
+        if unresolved:
+            body["data"]["unresolved_symbols"] = sorted(unresolved)
+    return success, body, status
+
+
+def _persist_import_rows(rows, skip_days_with_capture=False):
+    """Validate, dedup and store already-normalized rows (shared by both CSV
+    formats). With ``skip_days_with_capture`` a row is skipped when the daily
+    capture job already holds any fill for that day."""
     imported = 0
     skipped_duplicate = 0
     skipped_invalid = 0
+    skipped_covered = 0
     # The session has autoflush off, so a row added earlier in this same file
     # is invisible to fill_exists(); track its key here or a repeated row
     # would only fail at commit and roll the whole file back.
     seen_keys = set()
 
     try:
+        captured_days = set()
+        if skip_days_with_capture:
+            captured_days = {
+                str(day)
+                for (day,) in db_session.query(func.date(PnlTrade.trade_timestamp))
+                .filter(PnlTrade.source == "capture")
+                .distinct()
+                .all()
+            }
+
         for row in rows:
             symbol = row.get("symbol")
             exchange = row.get("exchange")
@@ -389,6 +484,10 @@ def import_trades_csv(api_key: str, rows: list[dict]) -> tuple[bool, dict, int]:
                 continue
 
             parsed_timestamp = parse_trade_timestamp(row.get("trade_timestamp"))
+
+            if captured_days and parsed_timestamp.strftime("%Y-%m-%d") in captured_days:
+                skipped_covered += 1
+                continue
 
             dedup_key = make_dedup_key(
                 tradeid=row.get("tradeid"),
@@ -446,18 +545,14 @@ def import_trades_csv(api_key: str, rows: list[dict]) -> tuple[bool, dict, int]:
             imported += 1
 
         db_session.commit()
-        return (
-            True,
-            {
-                "status": "success",
-                "data": {
-                    "imported": imported,
-                    "skipped_duplicate": skipped_duplicate,
-                    "skipped_invalid": skipped_invalid,
-                },
-            },
-            200,
-        )
+        data = {
+            "imported": imported,
+            "skipped_duplicate": skipped_duplicate,
+            "skipped_invalid": skipped_invalid,
+        }
+        if skip_days_with_capture:
+            data["skipped_covered_by_capture"] = skipped_covered
+        return True, {"status": "success", "data": data}, 200
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Error importing PnL CSV: {e}")

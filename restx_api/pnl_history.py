@@ -30,9 +30,11 @@ from services.pnl_history_service import (
     get_pnl_history,
     get_pnl_trades,
     get_strategy_legs,
+    import_kotak_statement,
     import_trades_csv,
     set_trade_strategy,
 )
+from utils.kotak_statement import is_kotak_statement
 from utils.logging import get_logger
 
 from .pnl_history_schema import (
@@ -233,6 +235,17 @@ class PnlImport(Resource):
                 )
 
             reader = csv.DictReader(io.StringIO(text))
+
+            # The file itself says which format it is: Kotak's Transaction
+            # Statement has Security Name / Market Rate columns no other
+            # export has. The service then also checks the account's broker,
+            # so a Kotak file can't be written into a Zerodha ledger.
+            if is_kotak_statement(reader.fieldnames):
+                success, response_data, status_code = import_kotak_statement(
+                    api_key=form_data["apikey"], raw_rows=list(reader)
+                )
+                return make_response(jsonify(response_data), status_code)
+
             rows = [_normalize_csv_row(row) for row in reader]
 
             success, response_data, status_code = import_trades_csv(

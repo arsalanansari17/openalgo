@@ -6,6 +6,69 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-01 — P&L History CSV import: Kotak "Transaction Statement" format
+
+**Branch:** `upgrade-main-2026-09-27`.
+**Upstream issue/PR:** none - fork-only subsystem (see the 2026-09-06 entry).
+**Files:** `utils/kotak_statement.py` (new), `services/pnl_history_service.py`,
+`restx_api/pnl_history.py`, `test/test_kotak_statement.py` (new).
+**Verified:** a real statement (acc3 / Iqbal, 2026-07-01..09-30, 186 lines)
+replayed against a stand-in for acc3's ledger (see below).
+
+### Problem
+
+The importer's column aliases only cover Zerodha Console and Kotak's raw API
+field names (`trdsym`, `avgprc`). Kotak's back-office "Transaction Statement"
+matched none of them: all 186 rows failed validation (no symbol, no price, and
+`DD/MM/YYYY` dates that would have been stamped "now"). The statement also has
+no trade/order id, labels every F&O row `NSEDERV` (SENSEX included), puts the
+instrument in free text (`OPTIDXNIFTY     06OCT2026CE  22850.00`, `Cyient Ltd`)
+and has one line per order at the average price, not per fill.
+
+### Fix
+
+- **Detection: by header, guarded by broker.** `is_kotak_statement()` recognises
+  the file from its columns (`Security Name`, `Market Rate`, `Transaction Type`,
+  `Trade Date`, `Trade Time`). `import_kotak_statement()` then requires the
+  account's broker (from the API key) to be `kotak`, so a statement cannot be
+  written into a Zerodha ledger (HTTP 400 with a clear message).
+- `utils/kotak_statement.py`: F&O name -> OpenAlgo symbol
+  (`NIFTY06OCT2622850CE`, exchange NFO; SENSEX/BANKEX -> BFO); equity company
+  name -> symbol through the symbol master (names compared after normalising
+  `LIMITED`/`LTD`/punctuation, exactly one match or the row is reported, never
+  guessed); `DD/MM/YYYY` + `Trade Time` -> ISO. Only options are supported for
+  F&O; futures and anything else are counted in `rejected_reasons`.
+- **Days the daily capture already holds are skipped**
+  (`skipped_covered_by_capture`). The statement has no ids and is order-level,
+  the capture stores per-fill rows, so an overlapping day cannot be
+  deduplicated and would double-count. Only days the capture never saw import.
+- Rows have no tradeid, so the existing composite dedup key applies; re-uploading
+  the same statement is a no-op.
+- `import_trades_csv` is unchanged for Zerodha; the shared loop moved into
+  `_persist_import_rows()`. The Zerodha response keys are unchanged.
+
+### Verified (stand-in ledger: acc3's real capture days, 2026-09-10..10-01)
+
+| Run | Result |
+|---|---|
+| First upload of both statements (186 lines) | 53 imported, 133 skipped as covered by capture, 0 invalid |
+| Imported | equity: 21 Aug, 26 Aug, 31 Aug (x2), 1 Sep; F&O: 1,2,3,7,8,9 Sep (8 lines/day) |
+| Same files again | 0 imported, 53 duplicates |
+
+The imported equity rows use the same `symbol`/`exchange` as acc3's captured
+rows (`WELCORP`/`NSE`, `CYIENT`/`NSE`), so the 21 Aug Welspun buy and 26 Aug
+Cyient buy pair with the 15 Sep / 21 Sep sells already in the ledger (those
+sells were previously read as unmatched shorts). 18 tests in
+`test/test_kotak_statement.py`.
+
+### Known limits
+
+Statement lines are order-level (average price), so an imported day is coarser
+than a captured one. Futures (`FUTIDX`/`FUTSTK`), currency and commodity lines
+are not supported - no sample to verify against.
+
+---
+
 ## 2026-10-01 — P&L ledger: dedup key was the bare Zerodha `tradeid`, which repeats across days
 
 **Branch:** `upgrade-main-2026-09-27`.
