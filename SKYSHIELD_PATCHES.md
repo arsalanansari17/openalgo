@@ -6,6 +6,66 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-01 — P&L ledger: dedup key was the bare Zerodha `tradeid`, which repeats across days
+
+**Branch:** `upgrade-main-2026-09-27`.
+**Upstream issue/PR:** none - fork-only subsystem (see the 2026-09-06 entry).
+**Files:** `database/pnl_db.py`, `services/pnl_history_service.py`,
+`services/pnl_capture_service.py`, `test/test_pnl_dedup_key.py` (new).
+**Verified:** acc2 production log + a real Zerodha Console F&O CSV, replayed
+against acc2's actual `tradebook_fills` rows in a scratch DB (see below).
+
+### Problem
+
+`make_dedup_key` used `tid:<tradeid>` and assumed a tradeid is unique on its
+own. Zerodha's trade numbers are only unique per exchange per day. A real F&O
+export (1,839 rows, Jan-Sep 2026) had five ids each shared by two different
+fills months apart (1287080/1287081: 2026-01-22 and 2026-03-05; 401066/7/8:
+2026-07-10 and 2026-07-16). Effects:
+
+- **CSV import:** the session has autoflush off, so the clash was invisible
+  until commit; `UNIQUE constraint failed: tradebook_fills.dedup_key` rolled
+  the whole file back (HTTP 500, nothing imported). Seen on acc2, 2026-10-01.
+- **Silent data loss (import and daily capture):** a fill whose id matched an
+  already-stored older fill was skipped as a "duplicate" with no error.
+
+### Fix
+
+- `make_dedup_key`: tradeid key is now `tid:<YYYY-MM-DD>:<NSE|BSE>:<tradeid>`.
+  `exchange_family()` folds NSE/NFO/CDS/NCO to `NSE` and BSE/BFO/BCD to `BSE`,
+  so a Console F&O row (labelled NSE) and the capture job's row (NFO) still
+  produce one key. No date available -> the old bare key.
+- `fill_exists(session, key, tradeid, timestamp)`: current key, then the legacy
+  bare key, but a legacy row only counts when it is from the same day.
+- `_migrate_dedup_keys_add_trade_date()` (runs in `init_db()` at every start):
+  rewrites legacy `tid:<id>` keys to the dated form. Idempotent; cannot collide
+  (legacy keys are unique per id, the new key only adds date/family).
+- Import and capture loops keep a `seen_keys` set, because rows added earlier
+  in the same batch are invisible with autoflush off.
+- Not changed: `parse_trade_timestamp` still dates an unparseable timestamp as
+  "now" instead of skipping the row.
+
+### Verified (scratch DB seeded with acc2's real 1,839 rows, real CSVs)
+
+| Step | Before fix | After fix |
+|---|---|---|
+| F&O CSV (1,839 rows) | HTTP 500, 0 imported | 1,596 imported, 243 skipped (live-captured Sep rows) |
+| EQ CSV (1,588 rows) | - | 0 imported, 1,588 skipped (already in) |
+| Both files again | - | 0 imported (idempotent) |
+
+Same result with the migration off (fallback lookup) and on (1,839 keys
+rewritten, none left in legacy form). 11 new tests in
+`test/test_pnl_dedup_key.py`; the existing P&L tests still pass (27 total).
+
+### Deploy note
+
+Needs a service restart (migration runs at startup). Back up `db/tradebook.db`
+first. Rows previously skipped as false duplicates are not recovered
+automatically: re-upload the Console CSV for the period and the missing fills
+import.
+
+---
+
 ## 2026-09-28 — Zerodha funds: also return Kite's `opening_balance` (`openingbalance`)
 
 **File:** `broker/zerodha/api/funds.py` (`get_margin_data`), additive only.

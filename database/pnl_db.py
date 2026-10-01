@@ -93,18 +93,50 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 
+def _trade_date(timestamp):
+    """YYYY-MM-DD of a parsed trade timestamp, or None when it has no date."""
+    try:
+        return timestamp.strftime("%Y-%m-%d")
+    except AttributeError:
+        return None
+
+
+def exchange_family(exchange):
+    """Collapse an exchange code to the numbering domain its trade ids come
+    from: cash and derivatives of one exchange share it (NSE/NFO/CDS/NCO ->
+    "NSE", BSE/BFO/BCD -> "BSE"). A Console F&O CSV labels a NIFTY option NSE
+    while the capture job stores NFO, and both must produce one key.
+    """
+    code = (exchange or "").strip().upper()
+    return _EXCHANGE_FAMILY_MAP.get(code, code or "?")
+
+
 def make_dedup_key(tradeid, orderid, symbol, exchange, action, quantity, average_price, timestamp):
     """Stable idempotency key for one fill.
 
-    A genuine ``tradeid`` is unique on its own. Without one (pre-fix capture,
-    or a CSV export that never included it), fall back to a composite of
-    every field that would differ between two distinct fills of the same
-    order - two legitimate fills can share orderid, symbol, action, and even
-    price, but not all of those plus quantity and timestamp at once in
-    practice. Hashed only to keep the indexed column short and fixed-width.
+    A ``tradeid`` is only unique within one exchange on one trading day -
+    Zerodha re-uses the same numbers on later days (2026-10-01: ids 1287080/1
+    and 401066-8 each belonged to two different fills months apart). So the
+    key is date + exchange family + tradeid, never the bare id: the bare id
+    made a CSV import abort on the clash and let the capture job silently
+    skip a real fill whose id matched an older one.
+
+    Without a tradeid (pre-fix capture, or a CSV export that never included
+    it), fall back to a composite of every field that would differ between
+    two distinct fills of the same order - two legitimate fills can share
+    orderid, symbol, action, and even price, but not all of those plus
+    quantity and timestamp at once in practice. Hashed only to keep the
+    indexed column short and fixed-width.
+
+    Rows written before 2026-10-01 carry the bare ``tid:<id>`` key; use
+    fill_exists() (not a plain key lookup) so those still dedupe.
     """
     tradeid = (tradeid or "").strip()
     if tradeid:
+        trade_date = _trade_date(timestamp)
+        if trade_date:
+            return f"tid:{trade_date}:{exchange_family(exchange)}:{tradeid}"
+        # No date to scope by: the legacy bare key is the best we can do.
         return f"tid:{tradeid}"
 
     # Numeric/timestamp fields are normalized before hashing so the same
@@ -186,6 +218,16 @@ try:
     # exchange (NSE for NIFTY, BSE for SENSEX) rather than the derivatives
     # exchange the broker feed reports - see normalize_fno_exchange().
     _CONSOLE_FNO_EXCHANGE_MAP = {EXCHANGE_NSE: EXCHANGE_NFO, EXCHANGE_BSE: EXCHANGE_BFO}
+    # See exchange_family(): which exchange's trade numbering a code belongs to.
+    _EXCHANGE_FAMILY_MAP = {
+        EXCHANGE_NSE: "NSE",
+        EXCHANGE_NFO: "NSE",
+        EXCHANGE_CDS: "NSE",
+        EXCHANGE_NCO: "NSE",
+        EXCHANGE_BSE: "BSE",
+        EXCHANGE_BFO: "BSE",
+        EXCHANGE_BCD: "BSE",
+    }
 except ImportError:
     # utils.constants is part of this same codebase and always importable in
     # practice; guarded only so a database-layer module never hard-fails
@@ -193,6 +235,7 @@ except ImportError:
     logger.exception("utils.constants unavailable - segment derivation disabled")
     _EXCHANGE_SEGMENT_MAP = {}
     _CONSOLE_FNO_EXCHANGE_MAP = {}
+    _EXCHANGE_FAMILY_MAP = {}
 
 
 def normalize_fno_exchange(segment, exchange):
@@ -311,6 +354,28 @@ class PnlCaptureRun(Base):
     finished_at = Column(DateTime, nullable=True)
 
 
+def fill_exists(session, dedup_key, tradeid, timestamp):
+    """True when this fill is already stored.
+
+    Checks the current key, then the legacy bare ``tid:<id>`` key that rows
+    written before 2026-10-01 carry - but only counts a legacy row as the same
+    fill when it is from the same trading day, because the whole point of the
+    new key is that one tradeid can belong to different fills on different
+    days. (_migrate_dedup_keys_add_trade_date rewrites the legacy keys at
+    startup, so this fallback only matters if that migration failed.)
+    """
+    if session.query(PnlTrade.id).filter_by(dedup_key=dedup_key).first():
+        return True
+
+    tradeid = (tradeid or "").strip()
+    trade_date = _trade_date(timestamp)
+    if tradeid and trade_date:
+        legacy = session.query(PnlTrade.trade_timestamp).filter_by(dedup_key=f"tid:{tradeid}").first()
+        if legacy is not None and _trade_date(legacy[0]) == trade_date:
+            return True
+    return False
+
+
 def init_db():
     """Initialize the tradebook database and tables. Idempotent - safe on a
     fresh or pre-existing db/tradebook.db, per project persistence
@@ -328,6 +393,7 @@ def init_db():
     init_db_with_logging(Base, engine, "Tradebook DB", logger)
     _migrate_add_segment_column()
     _migrate_add_strategy_column()
+    _migrate_dedup_keys_add_trade_date()
 
 
 def _migrate_rename_pnl_trades_table():
@@ -423,3 +489,43 @@ def _migrate_add_strategy_column():
             logger.info("Added tradebook_fills.strategy")
     except Exception:
         logger.exception("Could not add tradebook_fills.strategy")
+
+
+def _migrate_dedup_keys_add_trade_date():
+    """Rewrite the legacy bare ``tid:<tradeid>`` dedup keys to the dated form
+    make_dedup_key now produces (``tid:<YYYY-MM-DD>:<NSE|BSE>:<tradeid>``).
+
+    Idempotent: only rows whose key is exactly ``'tid:' || tradeid`` are
+    touched, so a second run finds nothing. Safe against the unique index
+    because legacy keys are unique per tradeid and the new key only adds
+    the date/family, so no two rows can end up with the same one. The CASE
+    mirrors exchange_family(). A row with no parseable timestamp keeps its
+    legacy key (fill_exists() still matches it).
+    """
+    from sqlalchemy import text
+
+    sql = text(
+        """
+        UPDATE tradebook_fills
+           SET dedup_key = 'tid:' || strftime('%Y-%m-%d', trade_timestamp) || ':' ||
+               CASE
+                 WHEN upper(exchange) IN ('NSE','NFO','CDS','NCO') THEN 'NSE'
+                 WHEN upper(exchange) IN ('BSE','BFO','BCD') THEN 'BSE'
+                 ELSE upper(exchange)
+               END || ':' || tradeid
+         WHERE tradeid IS NOT NULL
+           AND dedup_key = 'tid:' || tradeid
+           AND strftime('%Y-%m-%d', trade_timestamp) IS NOT NULL
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(tradebook_fills)"))}
+            if not existing:
+                return
+            result = conn.execute(sql)
+            conn.commit()
+            if result.rowcount:
+                logger.info(f"Rewrote {result.rowcount} legacy tradebook_fills dedup keys to dated form")
+    except Exception:
+        logger.exception("Could not rewrite legacy tradebook_fills dedup keys")

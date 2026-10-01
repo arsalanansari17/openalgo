@@ -39,6 +39,7 @@ from database.pnl_db import (
     PnlTrade,
     db_session,
     derive_segment,
+    fill_exists,
     make_dedup_key,
     parse_trade_timestamp,
 )
@@ -119,6 +120,9 @@ def capture_today_trades(auth_token: str, broker: str) -> dict:
 
         trades = response.get("data") or []
         new_count = 0
+        # autoflush is off, so rows added earlier in this loop are invisible
+        # to fill_exists(); track their keys so a repeat can't fail the commit.
+        seen_keys = set()
         for trade in trades:
             # Parsed once, then reused for both the dedup key and storage -
             # the key must be computed from the *canonical* timestamp so a
@@ -139,8 +143,11 @@ def capture_today_trades(auth_token: str, broker: str) -> dict:
                 timestamp=parsed_timestamp,
             )
 
-            if db_session.query(PnlTrade.id).filter_by(dedup_key=dedup_key).first():
+            if dedup_key in seen_keys or fill_exists(
+                db_session, dedup_key, trade.get("tradeid"), parsed_timestamp
+            ):
                 continue
+            seen_keys.add(dedup_key)
 
             db_session.add(
                 PnlTrade(

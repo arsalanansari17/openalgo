@@ -21,6 +21,7 @@ from database.pnl_db import (
     PnlTrade,
     db_session,
     derive_segment,
+    fill_exists,
     make_dedup_key,
     normalize_fno_exchange,
     parse_trade_timestamp,
@@ -368,6 +369,10 @@ def import_trades_csv(api_key: str, rows: list[dict]) -> tuple[bool, dict, int]:
     imported = 0
     skipped_duplicate = 0
     skipped_invalid = 0
+    # The session has autoflush off, so a row added earlier in this same file
+    # is invisible to fill_exists(); track its key here or a repeated row
+    # would only fail at commit and roll the whole file back.
+    seen_keys = set()
 
     try:
         for row in rows:
@@ -396,9 +401,12 @@ def import_trades_csv(api_key: str, rows: list[dict]) -> tuple[bool, dict, int]:
                 timestamp=parsed_timestamp,
             )
 
-            if db_session.query(PnlTrade.id).filter_by(dedup_key=dedup_key).first():
+            if dedup_key in seen_keys or fill_exists(
+                db_session, dedup_key, row.get("tradeid"), parsed_timestamp
+            ):
                 skipped_duplicate += 1
                 continue
+            seen_keys.add(dedup_key)
 
             # A CSV that carries its own segment (e.g. Zerodha Console's
             # EQ/FO column, already mapped to VALID_SEGMENTS by the REST
