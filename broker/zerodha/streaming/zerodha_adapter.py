@@ -8,7 +8,6 @@ The key fixes are in the _handle_ticks method for proper topic generation.
 """
 import json
 import os
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -16,6 +15,7 @@ from typing import Any
 
 from database.auth_db import get_auth_token_no_cache
 from database.token_db import get_token
+from utils import runtime as _runtime
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
 # Import the WebSocket client
@@ -27,14 +27,12 @@ from .zerodha_websocket import ZerodhaWebSocket
 # monkey-patched threading.Lock is its Semaphore, which is not OS-thread-safe
 # and crashes with greenlet.error: Cannot switch to a different thread when
 # its waiter wake-up fires across thread boundaries. Use a real OS mutex for
-# self.lock only — Timer/Thread stay as eventlet primitives because the
-# WebSocket library inside their callbacks needs the eventlet hub for I/O.
-if "eventlet" in sys.modules:
-    import eventlet
-
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+# self.lock ONLY - Timer/Thread/Event stay as eventlet primitives because the
+# WebSocket library inside their callbacks needs the eventlet hub for I/O
+# (using real threads there deadlocks /api/v1/history and /api/v1/expiry).
+# Whether eventlet patched this process is decided by utils.runtime, not by
+# whether it was imported.
+_real_threading = _runtime.original("threading")
 
 
 class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):

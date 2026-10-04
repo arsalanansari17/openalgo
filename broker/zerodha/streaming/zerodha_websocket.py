@@ -18,7 +18,6 @@ Implements:
 import json
 import ssl
 import struct
-import sys
 import threading
 import time
 from collections import deque
@@ -33,17 +32,14 @@ from database.auth_db import get_auth_token
 # SkyShieldEdge patch (#1421): see zerodha_adapter.py for full rationale.
 # self.lock is acquired across the asyncio WS proxy thread and the eventlet
 # hub thread; eventlet's monkey-patched Lock (its Semaphore) is not
-# OS-thread-safe. Use a real OS mutex for self.lock only. Threads/Events stay
-# as eventlet green primitives — the websocket-client library inside
+# OS-thread-safe. Use a real OS mutex for self.lock ONLY. Threads/Events stay
+# as eventlet green primitives - the websocket-client library inside
 # _run_websocket needs the eventlet hub for socket I/O; running it in a real
 # OS thread deadlocks all eventlet-patched broker calls (history, expiry,
 # etc.) because the socket reads can't yield back to the hub.
-if "eventlet" in sys.modules:
-    import eventlet
+from utils import runtime as _runtime
 
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+_real_threading = _runtime.original("threading")
 
 
 class ZerodhaWebSocket:

@@ -9,6 +9,7 @@ import time
 
 from database.auth_db import get_auth_token
 from utils.config import get_broker_api_key
+from utils import runtime as _runtime
 from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
@@ -29,12 +30,10 @@ logger = get_logger(__name__)
 # for socket I/O; a real OS thread there deadlocks history/expiry/etc.).
 # _send_lock in kotak_websocket stays eventlet: it wraps a yielding hs_send()
 # and is contended only between green threads on one OS thread.
-if "eventlet" in sys.modules:
-    import eventlet
-
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+# Whether eventlet patched this process is decided by utils.runtime, not by
+# whether it was imported (under the gthread worker eventlet can be imported
+# without patching anything).
+_real_threading = _runtime.original("threading")
 
 # Kotak's own names for the indices, which is how the index feed addresses them:
 # "nse_cm|Nifty 50", not the master-contract token. The names are not derivable

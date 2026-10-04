@@ -2,6 +2,12 @@
 Isolated, multi-client-safe WebSocket client for Kotak broker, using HSWebSocketLib.
 Inspired by AliceBlue architecture, with per-instance state and thread safety.
 Enhanced with partial update handling like AliceBlue's tick feed processing.
+
+DEPRECATION WARNING (Kotak Neo Sept 2026 update):
+HSM (HSWebSocketLib) is deprecated by Kotak. No longer used in their own SDK (v3.0.6+).
+Use KotakSFeedWebSocket (sfeed_websocket.py) instead — it supports new CAS and
+market-status message types, and feeds are resolved dynamically per data centre.
+This client continues to work via the legacy mlhsm endpoint but may be retired by Kotak.
 """
 
 import json
@@ -10,6 +16,7 @@ import threading
 import time
 from collections import deque
 
+from utils import runtime as _runtime
 from utils.logging import get_logger
 
 from .HSWebSocketLib import HSWebSocket
@@ -23,12 +30,10 @@ logger = get_logger(__name__)
 # mutex for self._lock only. _send_lock stays eventlet: it wraps the yielding
 # ws.hs_send() and only serialises green threads on one OS thread; a real OS
 # lock there could deadlock across a send that yields to the hub.
-if "eventlet" in sys.modules:
-    import eventlet
-
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+# Whether eventlet patched this process is decided by utils.runtime, not by
+# whether it was imported (under the gthread worker eventlet can be imported
+# without patching anything).
+_real_threading = _runtime.original("threading")
 
 
 class KotakWebSocket:

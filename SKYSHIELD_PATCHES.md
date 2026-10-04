@@ -6,6 +6,43 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-04 - Sync with upstream main (`ad2a3f505`, 239 commits) and move to a long-lived branch
+
+**Branch:** merged `origin/main` into `upgrade-main-2026-09-27` -> `sync-2026-10-04`, which becomes the fork's `main`
+(the branch the VMs deploy from; see TODO.md). **Upstream issue/PR:** n/a (sync).
+
+**Impact check (skill Step 0).** 640 upstream files vs 68 of ours; 9 changed on both sides, 6 real conflicts.
+Nothing changes the response shape of funds / holdings / margin / quotes / orderstatus / optionchain under eventlet.
+Upstream's new `gthread` worker is opt-in (`OPENALGO_WORKER_CLASS`, commented out in `.sample.env`); the new
+`BrokerBusyError` / 429 path is only reachable under gthread. One behaviour change that matters to SkyShieldAT:
+**`placesmartorder` now refuses (instead of proceeding) when the position-book read fails** (Zerodha + Kotak,
+`utils/position_read.py`). Dependencies: PyJWT, tornado, urllib3, openscript 0.5.0 -> 0.8.1 (no new packages);
+one new migration (`migrate_historify_sequences.py`).
+
+**Conflict resolutions** (each fork patch re-applied on the new upstream content, not a side pick):
+- `broker/zerodha/streaming/zerodha_adapter.py`, `zerodha_websocket.py` (#1421): upstream's `a884cc475` routes the
+  eventlet check through `utils.runtime` but still uses real OS threads for Timer/Event/Thread, which deadlocks
+  `/api/v1/history` and `/expiry`. Kept our design (**real OS mutex for `self.lock` only**), adopted
+  `_real_threading = _runtime.original("threading")` for the check.
+- `broker/kotak/streaming/kotak_adapter.py`, `kotak_websocket.py` (Kotak counterpart of #1421): same change.
+  Upstream's guard test (`test_gthread_foundation_runtime`) forbids `"eventlet" in sys.modules`, so these two
+  failed it until converted. Real mutex for `self._lock` only; `_send_lock` stays eventlet.
+- `broker/kotak/mapping/order_data.py`: kept our `_normalize_timestamp(...)` and took upstream's new `order_tag`.
+- `database/auth_db.py`, `services/holdings_service.py`: line-ending-only whole-file conflicts, three-way merged on
+  normalised text; our `*_no_cache` helpers (#1421) and holdings fields intact.
+- `frontend/dist`: rebuilt from the merged source (`npm ci && npm run build`, no TS errors, fork features present).
+
+**Verified.** Every line our fork added to the 68 changed files is present in the result (except the guards rewritten
+above and an upstream typing import). Merged tree compiles. Full suite (excluding `test_openscript*`, package not
+installed locally): 6,831 pass; 27 failed + 3 errors, of which 24 fail identically on pristine upstream `main`
+(Windows/Python 3.14/async-plugin/installer-script environment) and the other 3 were the eventlet-guard
+regressions above, now fixed (34 related tests pass).
+
+**Deploy note.** Needs `uv pip install -r requirements-nginx.txt`, `migrate_all.py`, restart; no `.env` edit.
+Keep `OPENALGO_WORKER_CLASS` unset (eventlet) - our patches assume it.
+
+---
+
 ## 2026-10-01 — P&L History CSV import: Kotak "Transaction Statement" format
 
 **Branch:** `upgrade-main-2026-09-27`.
