@@ -6,6 +6,16 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-04 - CI: Docker image jobs run only on marketcalls/openalgo
+
+**File:** `.github/workflows/ci.yml` (`docker-build`, `docker-manifest`). **Upstream:** fork-only, not for upstream.
+Upstream's workflow also runs on our fork. 27 of 29 jobs pass there, but the two Docker image jobs fail at "Login to
+Docker Hub" (the secrets exist only upstream) and GitHub emails a failure on every push to the fork's `main`. Both jobs
+now carry `github.repository == 'marketcalls/openalgo' &&`, so on the fork they are skipped. Note: CI also auto-commits
+a Linux rebuild of `frontend/dist` to `main` (`chore: auto-build frontend dist [skip ci]`); pull it after each push.
+
+---
+
 ## 2026-10-04 - Sync with upstream main (`ad2a3f505`, 239 commits) and move to a long-lived branch
 
 **Branch:** merged `origin/main` into `upgrade-main-2026-09-27` -> `sync-2026-10-04`, which becomes the fork's `main`

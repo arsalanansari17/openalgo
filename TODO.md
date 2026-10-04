@@ -5,14 +5,25 @@ date it was added and the **next action**; when finished, move it to **Done**
 with the date. Bugs/limitations that are not yet scheduled work go in
 `SKYSHIELD_PATCHES.md` ("Known limits") - link them here, don't copy them.
 
-Deployed branch: `upgrade-main-2026-09-27` (worktree `openalgo-sync`), all 3 VMs
-on the same commit. Push to the `fork` remote only, never `origin` (upstream).
+Deployed branch today: `upgrade-main-2026-09-27` (worktree `openalgo-sync`), all 3 VMs
+on the same commit. **Target: the fork's `main`** (= upstream + our patches, long-lived; sync by merging
+upstream into it, never a new dated branch) - see the first item below. Push to the `fork` remote only, never `origin` (upstream).
 `D:\Projects\SkyShieldEdge\openalgo` is still checked out on the old
 `upgrade-main-2026-09` - work in `openalgo-sync`.
 
 ## Open
 
 ### Do next
+
+- [ ] **Gunicorn's eventlet worker is deprecated** (warning at every start: "will be removed in Gunicorn 26"; our pin
+  is `gunicorn>=25.0,<26`). Our #1421 patches and eventlet assumptions depend on it. Plan before Gunicorn 26 / upstream
+  dropping eventlet: evaluate `OPENALGO_WORKER_CLASS=gthread` (opt-in, upstream guide `docs/gthread/README.md`) on one
+  account in a market-off window. Not urgent.
+
+- [ ] After a few trading days on `main`: point `openalgo-sync` at `main`, delete the dated branches on the fork
+  (`main-sync-*`, `upgrade-main-*`) and the 17 stale local fix branches (check each is contained first).
+- [ ] The 24 test failures that also fail on pristine upstream (Windows / async plugin / installer scripts) are
+  environment noise on this machine; install `openscript==0.8.1` locally to run `test_openscript*`.
 - [ ] **Re-upload Console CSVs to recover rows the old dedup key silently dropped**
   (2026-10-01). Any fill whose Zerodha trade id matched an older fill was skipped
   with no error, in both import and daily capture. Fixed going forward; past
@@ -64,6 +75,13 @@ on the same commit. Push to the `fork` remote only, never `origin` (upstream).
   is monkey-patched). Issue still "to file".
 
 ## Done
+- 2026-10-04 CI on the fork: Docker image jobs now run only on marketcalls/openalgo (no more failure emails); the CI
+  dist-rebuild commit `84fdb199d` pulled in and deployed to the VMs.
+- 2026-10-04 fork `main` (`bbbab68ec` = upstream `ad2a3f505` + our patches) deployed to acc1, acc2, acc3 (previous
+  HEAD `b7bf553dc`, rollback = `upgrade-main-2026-09-27`; DB backups in `db/backup_20261004_pre_main_sync/` on each VM).
+  Verified per VM: service active, no errors, migrations OK, served bundle = local build, https 200, ledger intact
+  (14,236 / 3,435 / 319, 0 legacy keys). Not yet seen: the SkyShieldAT bot running against the new OpenAlgo (see
+  SkyShieldAT/TODO.md Monday check).
 - 2026-10-02 acc3 ledger verified after the Kotak upload: 319 rows = 266 captured + 53 imported
   (2026-08-21..09-09); equity nets match the statements (WELCORP flat, CYIENT 125, ENGINERSIN 505).
 - 2026-10-02 `openalgo/` folder decision: leave it on the old branch (rollback copy), work only in
