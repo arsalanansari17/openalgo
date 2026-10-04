@@ -5,11 +5,9 @@ date it was added and the **next action**; when finished, move it to **Done**
 with the date. Bugs/limitations that are not yet scheduled work go in
 `SKYSHIELD_PATCHES.md` ("Known limits") - link them here, don't copy them.
 
-Deployed branch today: `upgrade-main-2026-09-27` (worktree `openalgo-sync`), all 3 VMs
-on the same commit. **Target: the fork's `main`** (= upstream + our patches, long-lived; sync by merging
-upstream into it, never a new dated branch) - see the first item below. Push to the `fork` remote only, never `origin` (upstream).
-`D:\Projects\SkyShieldEdge\openalgo` is still checked out on the old
-`upgrade-main-2026-09` - work in `openalgo-sync`.
+Deployed and local branch: the fork's `main` (= upstream + our patches; all 3 VMs run the same commit). `openalgo/` is the
+only local checkout. Sync = merge upstream into `main` (never a new dated branch). Push to the `fork` remote only,
+never `origin` (upstream). Rollback branch on the fork: `upgrade-main-2026-09-27`.
 
 ## Open
 
@@ -20,7 +18,7 @@ upstream into it, never a new dated branch) - see the first item below. Push to 
   dropping eventlet: evaluate `OPENALGO_WORKER_CLASS=gthread` (opt-in, upstream guide `docs/gthread/README.md`) on one
   account in a market-off window. Not urgent.
 
-- [ ] After a few trading days on `main`: point `openalgo-sync` at `main`, delete the dated branches on the fork
+- [ ] After a few trading days on `main`: delete the dated branches on the fork
   (`main-sync-*`, `upgrade-main-*`) and the 17 stale local fix branches (check each is contained first).
 - [ ] The 24 test failures that also fail on pristine upstream (Windows / async plugin / installer scripts) are
   environment noise on this machine; install `openscript==0.8.1` locally to run `test_openscript*`.
@@ -85,7 +83,7 @@ upstream into it, never a new dated branch) - see the first item below. Push to 
 - 2026-10-02 acc3 ledger verified after the Kotak upload: 319 rows = 266 captured + 53 imported
   (2026-08-21..09-09); equity nets match the statements (WELCORP flat, CYIENT 125, ENGINERSIN 505).
 - 2026-10-02 `openalgo/` folder decision: leave it on the old branch (rollback copy), work only in
-  `openalgo-sync`; recorded in CLAUDE.md.
+  superseded 2026-10-04: `openalgo/` is on `main` and is the only checkout.
 - 2026-10-02 Kotak statements uploaded to acc3 by the user. Result figures not checked by us
   (VM was off afterwards); expected acc3 ledger = 266 captured + 53 imported = 319 rows. Check
   next time the VM is up, together with any other acc3 read.
