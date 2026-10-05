@@ -6,6 +6,25 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-05 - Kotak: unique `ig` per order (fixed tag rejected every order after the first)
+
+**Files:** `broker/kotak/mapping/transform_data.py`, `test/test_kotak_order_tag.py` (new). **Upstream:** issue #2177,
+PR #2178 (branch `fix/kotak-unique-order-tag`, commit `7e2e0d4ae`); drop this patch when upstream merges a fix.
+
+**Problem.** Upstream #2155 (in our 2026-10-04 sync) sends `ig="openalgo"` on every Kotak Place Order. Kotak treats
+`ig` (echoed back as `GuiOrdId`) as a client order id and rejects a repeat with `Client Order Id Error Client
+OrderID already exists`. On 2026-10-05 acc3 got its first order through (IronCondor's first wing) and every later
+order was rejected: IronCondor's other legs and rollback, ExpiryFade's entry, NDS's exit and re-entry.
+
+**Fix.** Each Place Order sends `<prefix>-<uuid4>`: `openalgo`, or a caller `order_tag` capped at 15 chars. Same
+shape as the ids Kotak's own apps send (from acc3's order book: `W0BDV-<uuid4>`, `Basket_<uuid>_basket 1`, up to
+52 chars). Modify Order unchanged (no `ig`).
+
+**Verified.** All `test/test_kotak_*.py` pass (206, incl. 5 new). **Not yet verified live** — first Kotak orders after
+deploy to confirm (several orders in a row must all be accepted). Only acc3 (Kotak) is affected; acc1/acc2 are Zerodha.
+
+---
+
 ## 2026-10-04 - CI: Docker image jobs run only on marketcalls/openalgo
 
 **File:** `.github/workflows/ci.yml` (`docker-build`, `docker-manifest`). **Upstream:** fork-only, not for upstream.
