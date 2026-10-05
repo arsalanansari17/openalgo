@@ -20,8 +20,9 @@ order was rejected: IronCondor's other legs and rollback, ExpiryFade's entry, ND
 shape as the ids Kotak's own apps send (from acc3's order book: `W0BDV-<uuid4>`, `Basket_<uuid>_basket 1`, up to
 52 chars). Modify Order unchanged (no `ig`).
 
-**Verified.** All `test/test_kotak_*.py` pass (206, incl. 5 new). **Not yet verified live** — first Kotak orders after
-deploy to confirm (several orders in a row must all be accepted). Only acc3 (Kotak) is affected; acc1/acc2 are Zerodha.
+**Verified.** All `test/test_kotak_*.py` pass (206, incl. 5 new). Live on acc3, 2026-10-05 ~21:53 IST: two Place
+Orders back to back both accepted by Kotak (`stat: Ok`, two `nOrdNo`, distinct `openalgo-<uuid4>` GuiOrdIds); the
+exchange then rejected both only because the market was closed. Deployed to acc3 only (Kotak); acc1/acc2 are Zerodha.
 
 ---
 
