@@ -301,7 +301,8 @@ class PnlAttribution(Resource):
         position row also carries today's M2M (services/position_m2m.py).
         """
         try:
-            data = pnl_attribution_schema.load(request.json or {})
+            # Parsed silently so a malformed body is a 400 from the schema, not a 500.
+            data = pnl_attribution_schema.load(request.get_json(silent=True) or {})
             success, response_data, status_code = get_strategy_attribution(
                 api_key=data["apikey"], kind=data["kind"], include_m2m=data["m2m"]
             )

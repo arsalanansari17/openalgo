@@ -321,9 +321,10 @@ def get_pnl_data():
 
             # "m2m" = today's move only; anything else = the broker's own P&L (the
             # default, so a caller that sends nothing sees the Positions page's basis).
-            requested_basis = (request.get_json(silent=True) or {}).get(
-                "basis"
-            ) or request.args.get("basis")
+            body = request.get_json(silent=True)
+            requested_basis = (body.get("basis") if isinstance(body, dict) else None) or (
+                request.args.get("basis")
+            )
 
             m2m_response = build_m2m_tracker_response(
                 basis="m2m" if requested_basis == "m2m" else "pnl",
@@ -1129,6 +1130,9 @@ def get_pnl_data():
                     "max_drawdown": round(max_drawdown, 2),
                     "pnl_series": pnl_series,
                     "drawdown_series": drawdown_series,
+                    # The built-in curve, not the per-product one above: a page that
+                    # asked for M2M can tell it did not get it.
+                    "basis": "legacy",
                 },
             }
         ), 200

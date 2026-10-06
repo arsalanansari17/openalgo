@@ -198,6 +198,16 @@ export default function Holdings() {
     pauseWhenHidden: true,
   })
 
+  // A selection the (refreshed) split no longer contains, or a split that could not
+  // be read, falls back to All instead of leaving an empty page with no chip lit.
+  useEffect(() => {
+    if (strategyFilter === 'all') return
+    const exists =
+      attribution !== null &&
+      (strategyFilter === UNATTRIBUTED || attribution.strategies.includes(strategyFilter))
+    if (!exists) setStrategyFilter('all')
+  }, [attribution, strategyFilter])
+
   // With a strategy selected, everything below (rows, allocation, totals)
   // works on that strategy's share of each holding instead of the broker's.
   const scopedHoldings = useMemo(
@@ -211,14 +221,17 @@ export default function Holdings() {
   // Calculate enhanced stats based on real-time data
   const enhancedStats = useMemo(() => {
     if (strategyFilter !== 'all') {
+      if (scopedHoldings.length === 0) return null
       // The broker's statistics cover the whole portfolio, so total the
       // strategy's own rows. No day P&L: the split does not carry it.
       const invested = scopedHoldings.reduce(
         (sum, h) => sum + (h.quantity || 0) * (h.average_price || 0),
         0
       )
+      // The same price rule as the rows: without a live price a holding is marked at
+      // its own cost, so the cards and the table agree.
       const current = scopedHoldings.reduce(
-        (sum, h) => sum + (h.quantity || 0) * (h.ltp ?? h.average_price ?? 0),
+        (sum, h) => sum + (h.quantity || 0) * (h.ltp && h.ltp > 0 ? h.ltp : h.average_price || 0),
         0
       )
       const pnl = current - invested
@@ -360,8 +373,14 @@ export default function Holdings() {
     }
   }
 
+  // The split re-reads the broker's holdings on the server, so it is not repeated on
+  // every refresh (order events, tab returns...): at most once per interval, unless
+  // the user has just picked a strategy.
+  const ATTRIBUTION_MIN_INTERVAL_MS = 30000
+  const lastAttributionRef = useRef(0)
   const fetchAttribution = useCallback(async () => {
     if (!apiKey) return
+    lastAttributionRef.current = Date.now()
     try {
       const response = await tradingApi.getStrategyAttribution(apiKey, 'holdings')
       if (response.status === 'success' && response.data) {
@@ -397,7 +416,12 @@ export default function Holdings() {
           setHoldings(response.data.holdings || [])
           setStats(response.data.statistics)
           setError(null)
-          if (strategyFilterRef.current !== 'all') void fetchAttribution()
+          if (
+            strategyFilterRef.current !== 'all' &&
+            Date.now() - lastAttributionRef.current > ATTRIBUTION_MIN_INTERVAL_MS
+          ) {
+            void fetchAttribution()
+          }
         } else {
           setError(response.message || 'Failed to fetch holdings')
         }
@@ -647,7 +671,10 @@ export default function Holdings() {
                             'rounded-full',
                             strategyFilter === name && 'bg-pink-500 hover:bg-pink-600'
                           )}
-                          onClick={() => setStrategyFilter(name)}
+                          onClick={() => {
+                            setStrategyFilter(name)
+                            if (name !== 'all') void fetchAttribution()
+                          }}
                         >
                           {name === 'all' ? 'All' : name}
                         </Button>
