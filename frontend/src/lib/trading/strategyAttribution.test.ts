@@ -27,6 +27,7 @@ const attribution = (rows: Partial<AttributedRow>[]): StrategyAttribution => ({
     slices: [],
     mismatch: false,
     mismatch_reason: null,
+    leftover_owner: null,
     ...r,
   })),
 })
@@ -93,6 +94,35 @@ describe('groupByStrategy', () => {
   })
 })
 
+describe('flat position closed outside the book', () => {
+  it('gives the realized P&L to the one strategy the book still shows holding it', () => {
+    const groups = groupByStrategy(
+      [pos({ quantity: 0, ltp: 0.4, pnl: 1088.75 })],
+      attribution([{ slices: [], leftover_owner: 'IronCondor' }])
+    )
+    expect(Object.keys(groups)).toEqual(['IronCondor'])
+    expect(groups.IronCondor[0].pnl).toBeCloseTo(1088.75)
+    expect(groups.IronCondor[0].quantity).toBe(0)
+  })
+
+  it('keeps it Unattributed when no single strategy owns it', () => {
+    const groups = groupByStrategy(
+      [pos({ quantity: 0, ltp: 0.4, pnl: 1088.75 })],
+      attribution([{ slices: [], leftover_owner: null }])
+    )
+    expect(Object.keys(groups)).toEqual(['Unattributed'])
+  })
+
+  it('adds to the owner row when that strategy also realized P&L today', () => {
+    const groups = groupByStrategy(
+      [pos({ quantity: 0, ltp: 0, pnl: 1500 })],
+      attribution([{ slices: [slice('IC', 0, 0, 1000)], leftover_owner: 'IC' }])
+    )
+    expect(groups.IC).toHaveLength(1)
+    expect(groups.IC[0].pnl).toBeCloseTo(1500)
+  })
+})
+
 describe('narrowHoldingsToStrategy', () => {
   const holding: Holding = {
     symbol: 'INFY',
@@ -119,6 +149,7 @@ describe('narrowHoldingsToStrategy', () => {
         slices,
         mismatch: false,
         mismatch_reason: null,
+        leftover_owner: null,
       },
     ],
   })

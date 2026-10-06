@@ -42,6 +42,9 @@ export function narrowHoldingsToStrategy<T extends Holding>(
 /** A broker position narrowed to one strategy's share of it. */
 export type SlicedPosition = Position & { sliced?: boolean }
 
+const isSameContract = (a: Position, b: Position) =>
+  a.symbol === b.symbol && a.exchange === b.exchange && a.product === b.product
+
 /**
  * Split each broker position into the strategy slices the backend reported
  * (services/strategy_attribution.py). The broker row stays the truth for the
@@ -90,12 +93,20 @@ export function groupByStrategy(
     // position, or P&L the book never saw. Never dropped, so totals match.
     const leftover = (Number(pos.pnl) || 0) - explained
     if (slices.length === 0) {
-      add(UNATTRIBUTED, { ...pos, sliced: true })
+      // Nothing explains it, unless the book still shows exactly one strategy
+      // holding a position the broker has closed: then it is that strategy's.
+      add(attributed?.leftover_owner || UNATTRIBUTED, { ...pos, sliced: true })
     } else if (Math.abs(leftover) >= 0.005) {
+      const owner = attributed?.leftover_owner
+      const ownerRow = owner ? groups[owner]?.find((r) => isSameContract(r, pos)) : undefined
       if (remainderRow) {
         remainderRow.pnl += leftover
+      } else if (ownerRow) {
+        ownerRow.pnl += leftover
       } else {
-        add(UNATTRIBUTED, {
+        // A flat position the book still shows one strategy holding: that
+        // strategy closed it outside the book, so the realized P&L is its own.
+        add(owner || UNATTRIBUTED, {
           ...pos,
           quantity: 0,
           pnl: leftover,

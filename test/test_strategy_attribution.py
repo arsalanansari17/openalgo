@@ -295,3 +295,21 @@ def test_hedged_legs_flat_at_the_broker_net():
     legs = [_leg("A", "X", 100, 10.0), _leg("B", "X", -100, 10.0)]
     result = attribute([_pos("X", 30, 10.0)], legs, KIND_POSITIONS)
     assert _slices(result) == {"A": 100, "B": -100, UNATTRIBUTED: 30}
+
+
+def test_flat_broker_row_names_the_single_stale_strategy_as_leftover_owner():
+    result = attribute([_pos("X", 0, 0.0)], [_leg("IC", "X", -65, 17.15)], KIND_POSITIONS)
+    row = result["rows"][0]
+    assert row["slices"] == []
+    assert row["leftover_owner"] == "IC"
+
+
+def test_two_stale_strategies_on_a_flat_row_are_ambiguous():
+    legs = [_leg("A", "X", -65, 17.0), _leg("B", "X", 65, 3.0)]
+    result = attribute([_pos("X", 0, 0.0)], legs, KIND_POSITIONS)
+    assert result["rows"][0]["leftover_owner"] is None
+
+
+def test_open_broker_row_never_has_a_leftover_owner():
+    result = attribute([_pos("X", -65, 17.15)], [_leg("IC", "X", -65, 17.15)], KIND_POSITIONS)
+    assert result["rows"][0]["leftover_owner"] is None

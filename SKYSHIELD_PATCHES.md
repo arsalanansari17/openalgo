@@ -23,14 +23,16 @@ who owns what. The strategy book (`strategy_positions`, upstream) already keeps 
 today's realized P&L) plus an `Unattributed` remainder, so slices never exceed the broker quantity. Strategies
 hedging each other on one contract (A long 100, B short 40, broker net +60) keep their gross quantities when their
 signed sum reconciles with the broker net. A book that disagrees with the broker (net on the other side, or larger)
-is capped and flagged `mismatch` rather than being netted silently. A flat leg that realized P&L today is a
+is capped and flagged `mismatch` rather than being netted silently. A position the broker shows flat while the
+book still shows exactly one strategy holding it (closed outside the book) names that strategy as `leftover_owner`,
+and the unexplained realized P&L goes to it instead of Unattributed; two such strategies stay ambiguous. A flat leg that realized P&L today is a
 zero-quantity slice so an intraday exit stays under its strategy. Holdings total = free + T1 + pledged and match
 only CNC legs. The endpoint returns 503 when the book is unavailable (never "all unattributed"). Positions gets a
 "Strategy" grouping (slice P&L = qty x (LTP - avg) + realized today; the leftover to broker P&L stays on
 Unattributed so group totals equal the broker total; Close is hidden on slice rows because it closes the whole
 position). Holdings gets a Strategy chip filter; rows and totals are recomputed from the strategy's share.
 
-**Verified (local, 2026-10-06).** 33 backend tests and 8 frontend tests pass; `tsc` clean; Positions test still
+**Verified (local, 2026-10-06).** 31 attribution tests and 11 frontend tests pass; `tsc` clean; Positions test still
 passes. NOT yet verified: against real `strategy_positions` on a VM (plan Phase 0), or in a browser.
 
 **Next steps.** Phase 0 check of the book on each VM; Phase 3 manual assignment for Unattributed (overlay table);

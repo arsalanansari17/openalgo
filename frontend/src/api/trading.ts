@@ -111,6 +111,8 @@ export interface AttributedRow {
   slices: StrategySlice[]
   mismatch: boolean
   mismatch_reason: string | null
+  /** For a flat row only: the one strategy the book still shows holding it, owner of any unexplained realized P&L. */
+  leftover_owner: string | null
 }
 
 export interface StrategyAttribution {
