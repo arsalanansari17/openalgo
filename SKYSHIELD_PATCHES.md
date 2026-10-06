@@ -10,9 +10,13 @@ verify in production, then PR upstream.
 
 **Files:** `services/pnl_tracker_m2m.py` (new), `blueprints/pnltracker.py` (33 added lines, nothing removed: a hook
 before the original computation), `test/test_pnl_tracker_m2m.py` (new), `frontend/src/pages/PnLTracker.tsx` (a
-switch, labels, and the basis sent with the request), `PnLTracker.test.tsx` (new). **Upstream:** the bug is in upstream code; issue
-to file (draft in `SkyShieldEdge/UPSTREAM_ISSUE_pnltracker_draft.md` (outside the repo)), not blocking trading. The fork patch is a hook that leaves
-upstream's code intact as the fallback, so an upstream fix will take over cleanly.
+switch, labels, and the basis sent with the request), `PnLTracker.test.tsx` (new). **Upstream:** the bug is in upstream code. Issue
+marketcalls/openalgo#2180 and PR #2181 (branch `fix/pnltracker-product-and-carried-exit` on the fork, cut from upstream
+`main`, M2M basis only, 774 added lines and none removed; opened 2026-10-06, not yet reviewed). The fork patch is a
+hook that leaves upstream's code intact as the fallback. **When #2181 merges:** take upstream's `pnltracker.py` and
+the two services on the next sync, then re-apply only the fork's extras on top: the `basis` parameter (broker P&L view)
+in `services/pnl_tracker_m2m.py`, the `requested_basis` read in the hook, and the switch in `PnLTracker.tsx`. If #2181
+is closed unmerged, the fork keeps this patch as is.
 
 **Problem.** `get_pnl_data` keys positions and trades by `symbol_exchange` only, with no product. On acc1 on 2026-10-06
 IronCondor's MIS trades and ExpiryFade's NRML exit on NIFTY06OCT2622350PE were mixed, and the exit-only SELL of a

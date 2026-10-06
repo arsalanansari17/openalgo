@@ -48,10 +48,12 @@ Plan: `~/.claude/plans/let-s-first-make-a-tingly-wreath.md`. Source of truth is 
   figure (default); M2M = today's move from fills and yesterday's close, verified exact against Zerodha (acc1) and
   Kotak (acc3) on real rows. Next action: user reviews the diff, commit, deploy after 15:40 IST, then check in the
   browser (Positions > P&L | M2M).
-- [ ] **P&L Tracker with the P&L | M2M switch built locally** (2026-10-06): `services/pnl_tracker_m2m.py` + a 33-line hook in
+- [ ] **P&L Tracker with the P&L | M2M switch, deployed to acc1** (2026-10-06; acc2 and acc3 not yet): `services/pnl_tracker_m2m.py` + a 33-line hook in
   `blueprints/pnltracker.py` + a switch on the page; replayed on acc1 with real data (P&L basis ends on 3,906.50, M2M on
-  10,887.50, each equal to the Positions page). Next action: deploy after 15:40 IST, check `/pnl-tracker` in the browser.
-  Then file the upstream issue (draft: `../UPSTREAM_ISSUE_pnltracker_draft.md`; needs the user's OK to post publicly).
+  10,887.50, each equal to the Positions page). Reviewed by the user on acc1. Next action: acc2 and acc3 after 15:40 IST,
+  and watch PR #2181.
+  Upstream: issue marketcalls/openalgo#2180 and PR #2181 filed 2026-10-06 (see SKYSHIELD_PATCHES.md for what to
+  re-apply when it merges).
 - [x] **Flow Position Check (`pnl_above` / `pnl_below`) stays on the broker's P&L, by decision** (2026-10-06): it is a
   risk rule that other people's flows rely on, so the P&L | M2M switch must not change it.
 - [ ] **Other places that show a position P&L, not yet decided** (2026-10-06): Telegram `/pnl` and WhatsApp `/pnl`
