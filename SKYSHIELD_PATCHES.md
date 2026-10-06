@@ -12,11 +12,14 @@ verify in production, then PR upstream.
 before the original computation), `test/test_pnl_tracker_m2m.py` (new), `frontend/src/pages/PnLTracker.tsx` (a
 switch, labels, and the basis sent with the request), `PnLTracker.test.tsx` (new). **Upstream:** the bug is in upstream code. Issue
 marketcalls/openalgo#2180 and PR #2181 (branch `fix/pnltracker-product-and-carried-exit` on the fork, cut from upstream
-`main`, M2M basis only, 774 added lines and none removed; opened 2026-10-06, not yet reviewed). The fork patch is a
-hook that leaves upstream's code intact as the fallback. **When #2181 merges:** take upstream's `pnltracker.py` and
-the two services on the next sync, then re-apply only the fork's extras on top: the `basis` parameter (broker P&L view)
-in `services/pnl_tracker_m2m.py`, the `requested_basis` read in the hook, and the switch in `PnLTracker.tsx`. If #2181
-is closed unmerged, the fork keeps this patch as is.
+`main`; opened 2026-10-06, widened the same day to 5 commits, 23 files, +3,205 / -27: the per-product tracker curve, the
+tracker P&L | M2M switch, `POST /api/v1/pnl/attribution` with docs, Positions grouping by strategy and the P&L | M2M
+switch, and the Holdings strategy filter). The fork's hook leaves upstream's code intact as the fallback. **When #2181
+merges** (all or in part): take upstream's versions on the next sync, then remove the fork's duplicates: the
+`/attribution` route and `get_strategy_attribution` in the fork-only `restx_api/pnl_history.py` and
+`services/pnl_history_service.py` (upstream's route has the same URL, so two routes would clash), and re-apply the fork's
+extras that the PR does not carry: the Holdings T1/pledged columns and filters, the Positions search box, and the
+fork-only strategy-legs API. If #2181 is closed unmerged, or only partly merged, the fork keeps the rest as is.
 
 **Problem.** `get_pnl_data` keys positions and trades by `symbol_exchange` only, with no product. On acc1 on 2026-10-06
 IronCondor's MIS trades and ExpiryFade's NRML exit on NIFTY06OCT2622350PE were mixed, and the exit-only SELL of a
