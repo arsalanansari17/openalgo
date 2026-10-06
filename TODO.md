@@ -48,6 +48,12 @@ Plan: `~/.claude/plans/let-s-first-make-a-tingly-wreath.md`. Source of truth is 
   figure (default); M2M = today's move from fills and yesterday's close, verified exact against Zerodha (acc1) and
   Kotak (acc3) on real rows. Next action: user reviews the diff, commit, deploy after 15:40 IST, then check in the
   browser (Positions > P&L | M2M).
+- [ ] **Fork `main` is AHEAD of what the VMs run (2026-10-06 night) - do not deploy before the market closes.** All three
+  VMs run `f5e77130a` (verified: sanity passed on each, bots active). Two later commits on `main` port upstream PR #2181's
+  two review rounds (bad data and unusable fills, stale and duplicate requests, the tracker naming its basis, Holdings
+  and Positions fixes). Tests pass (111 backend, 59 frontend) but they are NOT deployed. Next action: deploy to acc1,
+  acc2, acc3 only after 15:40 IST on a trading day, with a DB backup, then the bot sanity check on each, and not on a day
+  you cannot watch it. Rollback = `git checkout f5e77130a` and restart OpenAlgo.
 - [ ] **P&L Tracker with the P&L | M2M switch, deployed to acc1** (2026-10-06; acc2 and acc3 not yet): `services/pnl_tracker_m2m.py` + a 33-line hook in
   `blueprints/pnltracker.py` + a switch on the page; replayed on acc1 with real data (P&L basis ends on 3,906.50, M2M on
   10,887.50, each equal to the Positions page). Reviewed by the user on acc1. Next action: acc2 and acc3 after 15:40 IST,

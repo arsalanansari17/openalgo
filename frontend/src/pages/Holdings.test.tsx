@@ -207,4 +207,25 @@ describe('Holdings strategy filter (fork page)', () => {
     expect(screen.getByText('INFY')).toBeInTheDocument()
     expect(screen.getByText('TCS')).toBeInTheDocument()
   })
+
+  it('shares one request when two chips are clicked while a read is still in flight', async () => {
+    await renderHoldings(ATTRIBUTION)
+    await waitFor(() => expect(mocks.getStrategyAttribution).toHaveBeenCalledTimes(1))
+
+    // From here the split is slow to answer.
+    let release: (value: unknown) => void = () => {}
+    const slow = new Promise((resolve) => {
+      release = resolve
+    })
+    mocks.getStrategyAttribution.mockImplementation(() => slow)
+
+    await userEvent.click(await chip('EquityBreakout'))
+    await userEvent.click(await chip('Unattributed'))
+
+    // The second click joined the read the first one started.
+    expect(mocks.getStrategyAttribution).toHaveBeenCalledTimes(2)
+
+    release(ATTRIBUTION)
+    await waitFor(() => expect(screen.getByText('TCS')).toBeInTheDocument())
+  })
 })
