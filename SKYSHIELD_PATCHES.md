@@ -9,7 +9,8 @@ verify in production, then PR upstream.
 ## 2026-10-05 - Kotak: unique `ig` per order (fixed tag rejected every order after the first)
 
 **Files:** `broker/kotak/mapping/transform_data.py`, `test/test_kotak_order_tag.py` (new). **Upstream:** issue #2177,
-PR #2178 (branch `fix/kotak-unique-order-tag`, commit `7e2e0d4ae`); drop this patch when upstream merges a fix.
+PR #2178 — **MERGED upstream 2026-10-06 as `caf19cea4`** (issue closed). Upstream's files are identical to ours, so
+nothing to drop: the next upstream sync takes it as-is. PR branch `fix/kotak-unique-order-tag` deleted.
 
 **Problem.** Upstream #2155 (in our 2026-10-04 sync) sends `ig="openalgo"` on every Kotak Place Order. Kotak treats
 `ig` (echoed back as `GuiOrdId`) as a client order id and rejects a repeat with `Client Order Id Error Client
