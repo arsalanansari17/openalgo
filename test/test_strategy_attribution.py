@@ -313,3 +313,27 @@ def test_two_stale_strategies_on_a_flat_row_are_ambiguous():
 def test_open_broker_row_never_has_a_leftover_owner():
     result = attribute([_pos("X", -65, 17.15)], [_leg("IC", "X", -65, 17.15)], KIND_POSITIONS)
     assert result["rows"][0]["leftover_owner"] is None
+
+
+def test_flat_row_with_one_strategy_realized_today_names_it_leftover_owner():
+    # ExpiryFade closed 22350PE today; the broker's P&L on the row differs from the fills.
+    legs = [_leg("ExpiryFade", "X", 0.0, 0.0, product="NRML") | {"today_realized_pnl": -5616.0}]
+    result = attribute([_pos("X", 0, 0.0, product="NRML")], legs, KIND_POSITIONS)
+    row = result["rows"][0]
+    assert [s["strategy"] for s in row["slices"]] == ["ExpiryFade"]
+    assert row["leftover_owner"] == "ExpiryFade"
+
+
+def test_flat_row_two_strategies_active_today_stays_ambiguous():
+    legs = [
+        _leg("A", "X", 0.0, 0.0) | {"today_realized_pnl": 100.0},
+        _leg("B", "X", 0.0, 0.0) | {"today_realized_pnl": -50.0},
+    ]
+    result = attribute([_pos("X", 0, 0.0)], legs, KIND_POSITIONS)
+    assert result["rows"][0]["leftover_owner"] is None
+
+
+def test_flat_row_stale_leg_plus_another_strategy_realized_today_is_ambiguous():
+    legs = [_leg("A", "X", -65, 17.0), _leg("B", "X", 0.0, 0.0) | {"today_realized_pnl": 10.0}]
+    result = attribute([_pos("X", 0, 0.0)], legs, KIND_POSITIONS)
+    assert result["rows"][0]["leftover_owner"] is None

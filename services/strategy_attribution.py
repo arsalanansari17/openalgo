@@ -100,10 +100,9 @@ def attribute_row(
         "slices": [],
         "mismatch": False,
         "mismatch_reason": None,
-        # Set only for a row that is flat at the broker: the one strategy the
-        # book still shows holding it, i.e. the likeliest owner of whatever
-        # realized P&L the slices do not explain (the position was closed
-        # outside the book, e.g. an exit order the bot never saw fill).
+        # Set only for a row that is flat at the broker: the one strategy with
+        # activity on it (still shown holding it, or realized P&L today), the
+        # owner of whatever realized P&L the slices do not explain.
         "leftover_owner": None,
     }
 
@@ -117,13 +116,16 @@ def attribute_row(
 
     if abs(broker_qty) <= _EPS:
         # Flat at the broker: any open leg is a stale book entry and owns no
-        # quantity. If exactly one strategy has such a leg it is named as the
-        # owner of the unexplained realized P&L; two or more is ambiguous.
+        # quantity. If exactly one strategy has activity on this contract (a
+        # stale open leg, or realized P&L today) it is named as the owner of
+        # whatever realized P&L the slices do not explain, e.g. the broker
+        # valuing a carried position at a different cost than the real fills.
+        # Two or more strategies is ambiguous and stays Unattributed.
         for leg in sorted(flat_today, key=by_strategy):
             result["slices"].append(_slice(leg, 0.0, 0.0))
-        stale_owners = {leg.get("strategy") for leg in open_legs if leg.get("strategy")}
-        if len(stale_owners) == 1:
-            result["leftover_owner"] = next(iter(stale_owners))
+        owners = {leg.get("strategy") for leg in open_legs + flat_today if leg.get("strategy")}
+        if len(owners) == 1:
+            result["leftover_owner"] = next(iter(owners))
         return result
 
     direction = 1.0 if broker_qty > 0 else -1.0

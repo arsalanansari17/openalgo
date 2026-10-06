@@ -123,6 +123,25 @@ describe('flat position closed outside the book', () => {
   })
 })
 
+describe('carried position the broker values differently from the fills', () => {
+  it('keeps the whole difference under the one strategy that traded it, not Unattributed', () => {
+    // ExpiryFade 22350PE NRML: fills give -5616, Kite reports -11544 for the row.
+    const groups = groupByStrategy(
+      [pos({ product: 'NRML', quantity: 0, ltp: 0.05, pnl: -11544 })],
+      attribution([
+        {
+          product: 'NRML',
+          slices: [slice('ExpiryFade', 0, 0, -5616)],
+          leftover_owner: 'ExpiryFade',
+        },
+      ])
+    )
+    expect(Object.keys(groups)).toEqual(['ExpiryFade'])
+    expect(groups.ExpiryFade).toHaveLength(1)
+    expect(groups.ExpiryFade[0].pnl).toBeCloseTo(-11544)
+  })
+})
+
 describe('narrowHoldingsToStrategy', () => {
   const holding: Holding = {
     symbol: 'INFY',
