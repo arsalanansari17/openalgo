@@ -337,3 +337,108 @@ def test_flat_row_stale_leg_plus_another_strategy_realized_today_is_ambiguous():
     legs = [_leg("A", "X", -65, 17.0), _leg("B", "X", 0.0, 0.0) | {"today_realized_pnl": 10.0}]
     result = attribute([_pos("X", 0, 0.0)], legs, KIND_POSITIONS)
     assert result["rows"][0]["leftover_owner"] is None
+
+
+def _patch_m2m_inputs(
+    monkeypatch, *, trades=None, prev_close=None, tradebook_ok=True, quotes_ok=True
+):
+    import services.quotes_service as quotes_service
+    import services.tradebook_service as tradebook_service
+
+    monkeypatch.setattr(
+        tradebook_service,
+        "get_tradebook",
+        lambda **kw: (
+            (True, {"status": "success", "data": trades or []}, 200)
+            if tradebook_ok
+            else (False, {"status": "error"}, 500)
+        ),
+    )
+
+    def fake_quotes(symbols, **kw):
+        if not quotes_ok:
+            return False, {"status": "error"}, 500
+        return (
+            True,
+            {
+                "status": "success",
+                "results": [
+                    {
+                        "symbol": s["symbol"],
+                        "exchange": s["exchange"],
+                        "data": {"prev_close": (prev_close or {}).get(s["symbol"])},
+                    }
+                    for s in symbols
+                ],
+            },
+            200,
+        )
+
+    monkeypatch.setattr(quotes_service, "get_multiquotes", fake_quotes)
+
+
+def test_service_positions_with_m2m_merges_todays_figures(monkeypatch):
+    position = _pos("X", 0, 0.05, product="NRML") | {
+        "average_price_basis": "carry_forward_valuation"
+    }
+    svc = _patch_service(
+        monkeypatch,
+        legs=[_leg("ExpiryFade", "X", 0.0, 0.0, product="NRML") | {"today_realized_pnl": -5616.0}],
+        positions=[position],
+    )
+    _patch_m2m_inputs(
+        monkeypatch,
+        trades=[_trade_row("X", "SELL", 195, 0.25, "NRML")],
+        prev_close={"X": 22.7},
+    )
+    ok, body, code = svc.get_strategy_attribution("key", "positions", include_m2m=True)
+    row = body["data"]["rows"][0]
+    assert ok and code == 200
+    assert row["m2m_available"] is True
+    assert row["m2m"] == -4377.75
+    assert row["overnight_quantity"] == 195
+    assert row["pnl_equals_m2m"] is True
+    assert body["data"]["m2m_error"] is None
+
+
+def test_service_m2m_is_opt_in(monkeypatch):
+    svc = _patch_service(monkeypatch, positions=[_pos("X", 0, 0.05)])
+    ok, body, _ = svc.get_strategy_attribution("key", "positions")
+    assert ok and "m2m" not in body["data"]["rows"][0]
+    assert "m2m_error" not in body["data"]
+
+
+def test_service_m2m_failure_is_reported_not_zeroed(monkeypatch):
+    svc = _patch_service(monkeypatch, positions=[_pos("X", 0, 0.05)])
+    _patch_m2m_inputs(monkeypatch, tradebook_ok=False)
+    ok, body, code = svc.get_strategy_attribution("key", "positions", include_m2m=True)
+    row = body["data"]["rows"][0]
+    assert ok and code == 200
+    assert body["data"]["m2m_error"] == "today's trades are unavailable"
+    assert row["m2m_available"] is False
+    assert "m2m" not in row
+
+
+def test_service_m2m_quotes_failure_is_reported(monkeypatch):
+    svc = _patch_service(monkeypatch, positions=[_pos("X", 0, 0.05)])
+    _patch_m2m_inputs(monkeypatch, quotes_ok=False)
+    ok, body, _ = svc.get_strategy_attribution("key", "positions", include_m2m=True)
+    assert body["data"]["m2m_error"] == "previous closes are unavailable"
+    assert body["data"]["rows"][0]["m2m_available"] is False
+
+
+def test_service_holdings_ignore_the_m2m_flag(monkeypatch):
+    svc = _patch_service(monkeypatch, holdings=[_holding("INFY", 10, 100.0)])
+    ok, body, _ = svc.get_strategy_attribution("key", "holdings", include_m2m=True)
+    assert ok and "m2m_error" not in body["data"]
+
+
+def _trade_row(symbol, action, quantity, price, product="MIS", exchange="NFO"):
+    return {
+        "symbol": symbol,
+        "exchange": exchange,
+        "product": product,
+        "action": action,
+        "quantity": quantity,
+        "average_price": price,
+    }

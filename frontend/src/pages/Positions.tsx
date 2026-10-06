@@ -56,7 +56,12 @@ import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { groupByStrategy, type SlicedPosition } from '@/lib/trading/strategyAttribution'
+import {
+  applyM2m,
+  groupByStrategy,
+  type PnlBasis,
+  type SlicedPosition,
+} from '@/lib/trading/strategyAttribution'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -79,6 +84,7 @@ interface FilterState {
 interface Preferences {
   grouping: GroupingType
   filters: FilterState
+  pnlBasis?: PnlBasis
 }
 
 function parseSymbol(symbol: string, exchange: string) {
@@ -182,6 +188,12 @@ export default function Positions() {
   const groupingRef = useRef<GroupingType>('none')
   groupingRef.current = grouping
 
+  // P&L is the broker's own figure (the default, as before). M2M is today's move
+  // only, computed from today's fills and yesterday's close (services/position_m2m.py).
+  const [pnlBasis, setPnlBasis] = useState<PnlBasis>('pnl')
+  const pnlBasisRef = useRef<PnlBasis>('pnl')
+  pnlBasisRef.current = pnlBasis
+
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
   // Automatically pauses when tab is hidden
   const {
@@ -203,6 +215,7 @@ export default function Positions() {
       if (saved) {
         const prefs: Preferences = JSON.parse(saved)
         if (prefs.grouping) setGrouping(prefs.grouping)
+        if (prefs.pnlBasis === 'pnl' || prefs.pnlBasis === 'm2m') setPnlBasis(prefs.pnlBasis)
         if (prefs.filters)
           setFilters({
             product: prefs.filters.product || [],
@@ -215,8 +228,8 @@ export default function Positions() {
 
   // Save preferences to localStorage
   const savePreferences = useCallback(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ grouping, filters }))
-  }, [grouping, filters])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ grouping, filters, pnlBasis }))
+  }, [grouping, filters, pnlBasis])
 
   useEffect(() => {
     savePreferences()
@@ -225,7 +238,11 @@ export default function Positions() {
   const fetchAttribution = useCallback(async () => {
     if (!apiKey) return
     try {
-      const response = await tradingApi.getStrategyAttribution(apiKey, 'positions')
+      const response = await tradingApi.getStrategyAttribution(
+        apiKey,
+        'positions',
+        pnlBasisRef.current === 'm2m'
+      )
       if (response.status === 'success' && response.data) {
         setAttribution(response.data)
         setAttributionError(null)
@@ -253,7 +270,8 @@ export default function Positions() {
         if (response.status === 'success' && response.data) {
           setPositions(response.data)
           setError(null)
-          if (groupingRef.current === 'strategy') void fetchAttribution()
+          if (groupingRef.current === 'strategy' || pnlBasisRef.current === 'm2m')
+            void fetchAttribution()
         } else {
           setError(response.message || 'Failed to fetch positions')
         }
@@ -267,10 +285,10 @@ export default function Positions() {
     [apiKey, fetchAttribution]
   )
 
-  // Switching to the strategy grouping fetches the split straight away
+  // Switching to the strategy grouping or to M2M fetches what it needs straight away
   useEffect(() => {
-    if (grouping === 'strategy') void fetchAttribution()
-  }, [grouping, fetchAttribution])
+    if (grouping === 'strategy' || pnlBasis === 'm2m') void fetchAttribution()
+  }, [grouping, pnlBasis, fetchAttribution])
 
   // Initial fetch and visibility-aware polling
   // Pauses polling when tab is hidden to save resources
@@ -340,10 +358,21 @@ export default function Positions() {
     [grouping]
   )
 
-  // Filter positions (use enhancedPositions for real-time LTP/PnL)
+  // The rows the page works on: live-priced, and with today's M2M in place of
+  // the broker's P&L when M2M is selected. Rows M2M cannot be computed for keep
+  // the broker's figure (counted in m2mFallbackRows, shown in a notice).
+  const { positions: basisPositions, fallbackRows: m2mFallbackRows } = useMemo(
+    () =>
+      pnlBasis === 'm2m'
+        ? applyM2m(enhancedPositions, attribution)
+        : { positions: enhancedPositions as SlicedPosition[], fallbackRows: 0 },
+    [enhancedPositions, attribution, pnlBasis]
+  )
+
+  // Filter positions (use basisPositions for real-time LTP/PnL)
   const filteredPositions = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
-    return enhancedPositions.filter((pos) => {
+    return basisPositions.filter((pos) => {
       if (filters.product.length > 0 && !filters.product.includes(pos.product)) return false
 
       const qty = pos.quantity || 0
@@ -362,7 +391,7 @@ export default function Positions() {
 
       return true
     })
-  }, [enhancedPositions, filters, searchQuery])
+  }, [basisPositions, filters, searchQuery])
 
   // Sort positions
   const sortedPositions = useMemo(() => {
@@ -415,7 +444,7 @@ export default function Positions() {
     }
 
     if (grouping === 'strategy') {
-      return groupByStrategy(sortedPositions, attribution)
+      return groupByStrategy(sortedPositions, attribution, pnlBasis)
     }
 
     const groups: Record<string, Position[]> = {}
@@ -426,7 +455,7 @@ export default function Positions() {
     })
 
     return groups
-  }, [sortedPositions, grouping, getGroupKey, attribution])
+  }, [sortedPositions, grouping, getGroupKey, attribution, pnlBasis])
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -530,7 +559,7 @@ export default function Positions() {
         'Quantity',
         'Avg Price',
         'LTP',
-        'P&L',
+        pnlBasis === 'm2m' ? 'M2M' : 'P&L',
         'P&L %',
       ]
       // sanitizeCSV's formula-injection prefix ('-123 -> '-123) is only needed
@@ -648,6 +677,28 @@ export default function Positions() {
         </Alert>
       )}
 
+      {/* M2M basis notices */}
+      {pnlBasis === 'm2m' && (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            M2M: today's move only. A position carried from a previous day is measured from
+            yesterday's close, one opened today from its fills.
+            {attribution?.rows.some((r) => r.pnl_equals_m2m) &&
+              ' On this broker the P&L of a carried position is already its M2M, so the two views match for those rows.'}
+          </p>
+          {(attribution?.m2m_error || (attribution && m2mFallbackRows > 0)) && (
+            <Alert variant="default" className="bg-amber-500/10 border-amber-500/30">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-700 dark:text-amber-400">
+                {attribution?.m2m_error
+                  ? `M2M is unavailable right now (${attribution.m2m_error}), so the broker's P&L is shown.`
+                  : `M2M could not be worked out for ${m2mFallbackRows} of ${basisPositions.length} positions, which show the broker's P&L instead.`}
+              </AlertDescription>
+            </Alert>
+          )}
+        </div>
+      )}
+
       {/* Stale Data Warning */}
       {showStaleWarning && (
         <Alert variant="default" className="bg-amber-500/10 border-amber-500/30">
@@ -684,6 +735,28 @@ export default function Positions() {
           <p className="text-muted-foreground">Monitor and manage your active trading positions</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* P&L basis: the broker's own P&L, or today's move only (M2M) */}
+          <fieldset
+            className="m-0 inline-flex min-w-0 rounded-md border p-0"
+            title="P&L is the broker's own figure. M2M is today's move only: carried positions are measured from yesterday's close."
+          >
+            <legend className="sr-only">P&L basis</legend>
+            {(['pnl', 'm2m'] as const).map((basis) => (
+              <Button
+                key={basis}
+                variant={pnlBasis === basis ? 'default' : 'ghost'}
+                size="sm"
+                className={cn(
+                  'rounded-none first:rounded-l-md last:rounded-r-md',
+                  pnlBasis === basis && 'bg-pink-500 hover:bg-pink-600'
+                )}
+                aria-pressed={pnlBasis === basis}
+                onClick={() => setPnlBasis(basis)}
+              >
+                {basis === 'pnl' ? 'P&L' : 'M2M'}
+              </Button>
+            ))}
+          </fieldset>
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
@@ -916,7 +989,7 @@ export default function Positions() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total P&L</CardDescription>
+            <CardDescription>{pnlBasis === 'm2m' ? 'Total M2M' : 'Total P&L'}</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
@@ -964,10 +1037,12 @@ export default function Positions() {
               icon={ChartCandlestick}
               title="No positions match your filters"
               description="Try adjusting or clearing your filters to see results."
-              action={hasActiveFilters ?
-                <Button variant="ghost" size="sm" onClick={clearFilters}>
-                  Clear Filters
-                </Button> : undefined
+              action={
+                hasActiveFilters ? (
+                  <Button variant="ghost" size="sm" onClick={clearFilters}>
+                    Clear Filters
+                  </Button>
+                ) : undefined
               }
             />
           ) : (
@@ -981,7 +1056,11 @@ export default function Positions() {
                     <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
                     <SortableHeader column={4} label="Avg Price" className="w-[120px] text-right" />
                     <TableHead className="w-[120px] text-right">LTP</TableHead>
-                    <SortableHeader column={6} label="P&L" className="w-[120px] text-right" />
+                    <SortableHeader
+                      column={6}
+                      label={pnlBasis === 'm2m' ? 'M2M' : 'P&L'}
+                      className="w-[120px] text-right"
+                    />
                     <SortableHeader column={7} label="P&L %" className="w-[100px] text-right" />
                     <TableHead className="w-[60px] text-right">Action</TableHead>
                   </TableRow>
@@ -1145,7 +1224,7 @@ export default function Positions() {
                 <TableFooter>
                   <TableRow className="bg-muted/50">
                     <TableCell colSpan={6} className="text-right text-muted-foreground">
-                      Total P&L:
+                      {pnlBasis === 'm2m' ? 'Total M2M:' : 'Total P&L:'}
                     </TableCell>
                     <TableCell
                       className={cn(

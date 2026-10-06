@@ -297,12 +297,13 @@ class PnlAttribution(Resource):
     def post(self):
         """Live positions or holdings split into per-strategy slices, with an
         Unattributed remainder - see services/strategy_attribution.py. Body:
-        {apikey, kind: "positions" | "holdings"}.
+        {apikey, kind: "positions" | "holdings", m2m?: bool}. With m2m, each
+        position row also carries today's M2M (services/position_m2m.py).
         """
         try:
             data = pnl_attribution_schema.load(request.json or {})
             success, response_data, status_code = get_strategy_attribution(
-                api_key=data["apikey"], kind=data["kind"]
+                api_key=data["apikey"], kind=data["kind"], include_m2m=data["m2m"]
             )
             return make_response(jsonify(response_data), status_code)
         except ValidationError as err:

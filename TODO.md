@@ -44,6 +44,17 @@ Plan: `~/.claude/plans/let-s-first-make-a-tingly-wreath.md`. Source of truth is 
   `strategy_positions` / `strategy_order_tags`)? Needs approval inside 08:30-15:30 IST.
 - [ ] Browser check after deploy: Positions > Filters > Grouping "Strategy"; Holdings > Filters > Strategy chips;
   totals vs the broker's own; 390px width.
+- [ ] **P&L | M2M switch on Positions built locally, uncommitted, not deployed** (2026-10-06). P&L = the broker's own
+  figure (default); M2M = today's move from fills and yesterday's close, verified exact against Zerodha (acc1) and
+  Kotak (acc3) on real rows. Next action: user reviews the diff, commit, deploy after 15:40 IST, then check in the
+  browser (Positions > P&L | M2M).
+- [ ] **P&L Tracker (`/pnl-tracker`, `blueprints/pnltracker.py`) is wrong on a carried position** (2026-10-06): it keys
+  positions by symbol only (IronCondor MIS + ExpiryFade NRML on one contract get mixed) and treats a carried exit as a
+  new short; it showed 15,489.50 where the fills total 9,834.50. Next action: file the upstream issue with the
+  traceback and numbers, then a logged fork patch (group by symbol and product, use the M2M basis). Does not block
+  trading, so no rush.
+- [ ] Open question for the strategy book: a manual exit (22450PE, 2026-10-06) leaves a stale open leg (IronCondor -65)
+  in `strategy_positions`. Phase 3 manual assignment should be able to close such a leg.
 - [ ] Phase 3: manual assignment for Unattributed (manual / pre-OpenAlgo holdings) via a fork-only overlay table
   with an `upgrade/` migration. Decision pending.
 - [ ] Phase 4: AlgoMirror reads `/pnl/attribution` per account and drops its `position_tags` (see Algomirror/TODO.md).

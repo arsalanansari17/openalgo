@@ -113,12 +113,24 @@ export interface AttributedRow {
   mismatch_reason: string | null
   /** For a flat row only: the one strategy the book still shows holding it, owner of any unexplained realized P&L. */
   leftover_owner: string | null
+  /** Positions with m2m requested only: today's M2M (services/position_m2m.py). */
+  m2m_available?: boolean
+  m2m_reason?: string | null
+  /** M2M independent of the live price; m2m = m2m_fixed + quantity * LTP. */
+  m2m_fixed?: number | null
+  m2m?: number | null
+  overnight_quantity?: number
+  prev_close?: number | null
+  /** The broker's own P&L on this carried row is already the day's M2M (Kotak). */
+  pnl_equals_m2m?: boolean
 }
 
 export interface StrategyAttribution {
   kind: 'positions' | 'holdings'
   rows: AttributedRow[]
   strategies: string[]
+  /** Set when M2M was requested but today's trades or previous closes could not be fetched. */
+  m2m_error?: string | null
 }
 
 export const UNATTRIBUTED = 'Unattributed'
@@ -385,11 +397,13 @@ export const tradingApi = {
    */
   getStrategyAttribution: async (
     apiKey: string,
-    kind: 'positions' | 'holdings'
+    kind: 'positions' | 'holdings',
+    m2m = false
   ): Promise<ApiResponse<StrategyAttribution>> => {
     const response = await apiClient.post<ApiResponse<StrategyAttribution>>('/pnl/attribution', {
       apikey: apiKey,
       kind,
+      m2m,
     })
     return response.data
   },

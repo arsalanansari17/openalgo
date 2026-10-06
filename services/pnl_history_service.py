@@ -592,7 +592,43 @@ def get_strategy_legs(api_key: str, strategy: str | None = None):
         return False, {"status": "error", "message": str(e)}, 500
 
 
-def get_strategy_attribution(api_key: str, kind: str):
+def _m2m_for_positions(api_key: str, positions: list[dict]):
+    """Today's M2M per position row, from today's fills and yesterday's close
+    (services/position_m2m.py). Returns (results keyed by row, error message).
+    A failed fetch is reported, never turned into zeros: the page then falls
+    back to the broker's own P&L instead of showing a wrong M2M."""
+    from services.position_m2m import SUPPORTED_EXCHANGES, compute_m2m
+    from services.quotes_service import get_multiquotes
+    from services.tradebook_service import get_tradebook
+
+    ok, tradebook, _ = get_tradebook(api_key=api_key)
+    if not ok:
+        return {}, "today's trades are unavailable"
+    trades = tradebook.get("data") or []
+
+    symbols = sorted(
+        {
+            (row.get("symbol"), row.get("exchange"))
+            for row in positions
+            if row.get("exchange") in SUPPORTED_EXCHANGES
+        }
+    )
+    prev_closes: dict[tuple, float | None] = {}
+    if symbols:
+        ok, quotes, _ = get_multiquotes(
+            [{"symbol": symbol, "exchange": exchange} for symbol, exchange in symbols],
+            api_key=api_key,
+        )
+        if not ok:
+            return {}, "previous closes are unavailable"
+        for item in quotes.get("results") or []:
+            prev = (item.get("data") or {}).get("prev_close")
+            prev_closes[(item.get("symbol"), item.get("exchange"))] = prev
+
+    return compute_m2m(positions, trades, prev_closes), None
+
+
+def get_strategy_attribution(api_key: str, kind: str, include_m2m: bool = False):
     """Live positions or holdings split into per-strategy slices.
 
     Reads the broker's own rows (positionbook / holdings services) and the
@@ -632,7 +668,32 @@ def get_strategy_attribution(api_key: str, kind: str):
         if not isinstance(rows, list):
             rows = []
 
-        return True, {"status": "success", "data": attribute(rows, legs, kind)}, 200
+        data = attribute(rows, legs, kind)
+
+        if include_m2m and kind == KIND_POSITIONS:
+            m2m_results, m2m_error = _m2m_for_positions(api_key, rows)
+            data["m2m_error"] = m2m_error
+            for raw, out in zip(rows, data["rows"], strict=True):
+                m2m = m2m_results.get((raw.get("symbol"), raw.get("exchange"), raw.get("product")))
+                if m2m is None:
+                    out["m2m_available"] = False
+                    out["m2m_reason"] = m2m_error or "not computed"
+                    continue
+                out["m2m_available"] = m2m["available"]
+                out["m2m_reason"] = m2m["reason"]
+                out["m2m_fixed"] = m2m["m2m_fixed"]
+                out["m2m"] = m2m["m2m"]
+                out["overnight_quantity"] = m2m["overnight_quantity"]
+                out["prev_close"] = m2m["prev_close"]
+                # Kotak's own P&L on a carried leg is already the day's M2M
+                # (it values the leg at the previous settlement), so the two
+                # views coincide there; the page says so.
+                out["pnl_equals_m2m"] = (
+                    raw.get("average_price_basis") == "carry_forward_valuation"
+                    and abs(m2m["overnight_quantity"]) > 1e-9
+                )
+
+        return True, {"status": "success", "data": data}, 200
     except Exception as e:
         logger.exception(f"Error computing strategy attribution: {e}")
         return False, {"status": "error", "message": str(e)}, 500

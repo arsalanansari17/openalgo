@@ -6,6 +6,41 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-06 - Positions: P&L | M2M switch (today's move, from fills and yesterday's close)
+
+**Files:** `services/position_m2m.py` (new, pure), `services/pnl_history_service.py` (`_m2m_for_positions`, `include_m2m`),
+`restx_api/pnl_history.py` + `pnl_history_schema.py` (`m2m` flag on `POST /api/v1/pnl/attribution`),
+`test/test_position_m2m.py` + `test/test_strategy_attribution.py`, `frontend/src/lib/trading/strategyAttribution.ts`
+(`applyM2m`, M2M basis in `groupByStrategy`), `frontend/src/pages/Positions.tsx`, `Positions.m2m.test.tsx`. **Upstream:**
+fork-only, not for upstream; no upstream broker mapping is touched.
+
+**Problem.** Positions shows the broker's `pnl`. On Zerodha that figure uses Kite's own carried cost for an overnight
+position, which was wrong on acc1 for NIFTY06OCT2622350PE NRML on 2026-10-06 (carried at 59.45, IronCondor's same-day
+MIS buy-back price, instead of the real fill 29.05): Kite P&L -11,544 against -5,616 from the fills. On Kotak the
+broker's `pnl` for a carried leg is already the day's M2M (it values the leg at the previous settlement; the entry cost
+is not reachable through Kotak's API). The P&L Tracker took the same Kite figure and also mixed IronCondor's MIS and
+ExpiryFade's NRML trades on one contract (it keys positions by symbol, not symbol and product): it showed 15,489.50
+for a day whose fills total 9,834.50.
+
+**Fix.** `P&L` stays the broker's own number and the default. `M2M` is today's move only:
+`(sell value - buy value, today) + end quantity x LTP - overnight quantity x previous close`, from today's tradebook
+and the quotes' `prev_close`, computed in the fork-only endpoint so it works for any broker that gives both. The server
+returns the price-independent part (`m2m_fixed`); the page adds the live LTP. A row it cannot compute (carried with no
+previous close, no live price, or an exchange with a price multiplier: MCX, CDS) keeps the broker figure and is
+counted in a notice; a failed fetch is reported, never turned into zeros. Strategy grouping under M2M gives a flat row
+to the one strategy that traded it and splits an open row by quantity (the book does not record which part was
+carried, so the per-strategy split of a shared row is an approximation; the row total is exact).
+
+**Verified (2026-10-06, real data, read-only).** Computed M2M equals the broker's own figure to the paisa on every row:
+acc1 Zerodha 6/6 rows against Kite's `m2m` (total 10,887.50), acc3 Kotak 6/6 rows against Kotak's `pnl` (total
+7,211.75), including both carried NRML rows on each; the quotes' `prev_close` equalled the broker's own close on every
+row. 50 backend and 34 frontend tests pass. NOT yet verified: in a browser, on a deployed VM.
+
+**Next steps.** Deploy after 15:40 IST. Then the P&L Tracker: file the upstream issue (grouping by symbol only, and a
+carried exit treated as a new short), then a logged fork patch to group by symbol and product and use the M2M basis.
+
+---
+
 ## 2026-10-06 - Positions grouped by strategy, Holdings filtered by strategy (`/pnl/attribution`)
 
 **Files:** `services/strategy_attribution.py` (new, pure), `services/pnl_history_service.py` (`get_strategy_attribution`),

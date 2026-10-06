@@ -40,7 +40,50 @@ export function narrowHoldingsToStrategy<T extends Holding>(
 }
 
 /** A broker position narrowed to one strategy's share of it. */
-export type SlicedPosition = Position & { sliced?: boolean }
+export type SlicedPosition = Position & { sliced?: boolean; m2mBase?: number }
+
+/** Which P&L a page shows: the broker's own, or today's move only (M2M). */
+export type PnlBasis = 'pnl' | 'm2m'
+
+/**
+ * Show today's M2M instead of the broker's P&L (services/position_m2m.py). The
+ * server returns the part of M2M that does not move with the price
+ * (`m2m_fixed`); the live LTP is added here so the figure keeps ticking between
+ * polls. A row the server could not compute keeps the broker's own P&L rather
+ * than showing a wrong number, and is listed in `fallbackRows`.
+ *
+ * `m2mBase` is what the percentage is measured against: yesterday's close for a
+ * carried position, the average entry price otherwise.
+ */
+export function applyM2m(
+  positions: Position[],
+  attribution: StrategyAttribution | null
+): { positions: SlicedPosition[]; fallbackRows: number } {
+  if (!attribution) return { positions, fallbackRows: positions.length }
+  const byKey = new Map(attribution.rows.map((r) => [`${r.symbol}|${r.exchange}|${r.product}`, r]))
+  let fallbackRows = 0
+  const out = positions.map((pos): SlicedPosition => {
+    const row = byKey.get(`${pos.symbol}|${pos.exchange}|${pos.product}`)
+    if (!row?.m2m_available || row.m2m_fixed == null) {
+      fallbackRows += 1
+      return pos
+    }
+    const qty = Number(pos.quantity) || 0
+    const ltp = Number(pos.ltp)
+    const live = qty !== 0 && Number.isFinite(ltp) && ltp > 0 ? qty * ltp : 0
+    const pnl = row.m2m_fixed + live
+    const carried = Math.abs(row.overnight_quantity ?? 0) > 1e-9
+    const base = carried ? row.prev_close || 0 : Number(pos.average_price) || 0
+    const invested = Math.abs(qty) * base
+    return {
+      ...pos,
+      pnl,
+      pnlpercent: invested > 0 ? (pnl / invested) * 100 : 0,
+      m2mBase: base,
+    }
+  })
+  return { positions: out, fallbackRows }
+}
 
 const isSameContract = (a: Position, b: Position) =>
   a.symbol === b.symbol && a.exchange === b.exchange && a.product === b.product
@@ -53,8 +96,9 @@ const isSameContract = (a: Position, b: Position) =>
  * group's rows always add back up to the broker's own P&L.
  */
 export function groupByStrategy(
-  positions: Position[],
-  attribution: StrategyAttribution | null
+  positions: SlicedPosition[],
+  attribution: StrategyAttribution | null,
+  basis: PnlBasis = 'pnl'
 ): Record<string, SlicedPosition[]> {
   const byKey = new Map(
     (attribution?.rows ?? []).map((r) => [`${r.symbol}|${r.exchange}|${r.product}`, r])
@@ -68,6 +112,31 @@ export function groupByStrategy(
   for (const pos of positions) {
     const attributed = byKey.get(`${pos.symbol}|${pos.exchange}|${pos.product}`)
     const slices = attributed?.slices ?? []
+
+    if (basis === 'm2m') {
+      // The row's M2M (already in pos.pnl) is exact; how it divides between
+      // strategies is not recorded anywhere, so an open row is split by each
+      // strategy's quantity, and a flat row goes to the one strategy that
+      // traded it (or stays Unattributed when that is ambiguous).
+      const qty = Number(pos.quantity) || 0
+      const openSlices = slices.filter((s) => s.quantity !== 0)
+      const weight = openSlices.reduce((sum, s) => sum + Math.abs(s.quantity), 0)
+      if (qty !== 0 && weight > 0) {
+        for (const slice of openSlices) {
+          add(slice.strategy, {
+            ...pos,
+            quantity: slice.quantity,
+            average_price: slice.average_price,
+            pnl: (Number(pos.pnl) || 0) * (Math.abs(slice.quantity) / weight),
+            sliced: true,
+          })
+        }
+      } else {
+        add(attributed?.leftover_owner || UNATTRIBUTED, { ...pos, sliced: true })
+      }
+      continue
+    }
+
     const ltp = Number(pos.ltp)
     const hasLtp = Number.isFinite(ltp) && ltp > 0
     let explained = 0
@@ -117,10 +186,12 @@ export function groupByStrategy(
     }
   }
 
-  // Percent is relative to what the slice cost, so it is set once the P&L is final.
+  // Percent is relative to what the slice cost (or, for M2M, what the day's move
+  // is measured from), so it is set once the P&L is final.
   for (const rows of Object.values(groups)) {
     for (const row of rows) {
-      const invested = Math.abs((row.quantity || 0) * (row.average_price || 0))
+      const base = basis === 'm2m' ? row.m2mBase || 0 : row.average_price || 0
+      const invested = Math.abs((row.quantity || 0) * base)
       row.pnlpercent = invested > 0 ? (row.pnl / invested) * 100 : 0
     }
   }
