@@ -79,7 +79,7 @@ export function groupByStrategy(
         quantity: slice.quantity,
         average_price: slice.average_price,
         pnl,
-        pnlpercent: undefined,
+        pnlpercent: 0,
         sliced: true,
       }
       if (slice.strategy === UNATTRIBUTED) remainderRow = row
@@ -99,10 +99,18 @@ export function groupByStrategy(
           ...pos,
           quantity: 0,
           pnl: leftover,
-          pnlpercent: undefined,
+          pnlpercent: 0,
           sliced: true,
         })
       }
+    }
+  }
+
+  // Percent is relative to what the slice cost, so it is set once the P&L is final.
+  for (const rows of Object.values(groups)) {
+    for (const row of rows) {
+      const invested = Math.abs((row.quantity || 0) * (row.average_price || 0))
+      row.pnlpercent = invested > 0 ? (row.pnl / invested) * 100 : 0
     }
   }
   return groups

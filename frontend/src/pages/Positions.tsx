@@ -56,7 +56,7 @@ import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { groupByStrategy } from '@/lib/trading/strategyAttribution'
+import { groupByStrategy, type SlicedPosition } from '@/lib/trading/strategyAttribution'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -409,7 +409,7 @@ export default function Positions() {
   }, [filteredPositions, sortColumn, sortDirection])
 
   // Group positions
-  const groupedPositions = useMemo(() => {
+  const groupedPositions = useMemo((): Record<string, SlicedPosition[]> => {
     if (grouping === 'none') {
       return { _all: sortedPositions }
     }
