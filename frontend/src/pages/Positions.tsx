@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { tradingApi } from '@/api/trading'
+import { type StrategyAttribution, tradingApi } from '@/api/trading'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -56,6 +56,7 @@ import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { groupByStrategy } from '@/lib/trading/strategyAttribution'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -65,7 +66,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
-type GroupingType = 'none' | 'underlying' | 'underlying_expiry'
+type GroupingType = 'none' | 'underlying' | 'underlying_expiry' | 'strategy'
 type SortColumn = 0 | 3 | 4 | 6 | 7 | null
 type SortDirection = 'asc' | 'desc'
 
@@ -173,6 +174,14 @@ export default function Positions() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
+  // Strategy split of the broker rows (fork-only /pnl/attribution). Only
+  // fetched while grouped by strategy; null means "not available", which the
+  // grouping shows as one Unattributed group rather than guessing.
+  const [attribution, setAttribution] = useState<StrategyAttribution | null>(null)
+  const [attributionError, setAttributionError] = useState<string | null>(null)
+  const groupingRef = useRef<GroupingType>('none')
+  groupingRef.current = grouping
+
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
   // Automatically pauses when tab is hidden
   const {
@@ -213,6 +222,23 @@ export default function Positions() {
     savePreferences()
   }, [savePreferences])
 
+  const fetchAttribution = useCallback(async () => {
+    if (!apiKey) return
+    try {
+      const response = await tradingApi.getStrategyAttribution(apiKey, 'positions')
+      if (response.status === 'success' && response.data) {
+        setAttribution(response.data)
+        setAttributionError(null)
+      } else {
+        setAttribution(null)
+        setAttributionError(response.message || 'Strategy split unavailable')
+      }
+    } catch {
+      setAttribution(null)
+      setAttributionError('Strategy split unavailable')
+    }
+  }, [apiKey])
+
   const fetchPositions = useCallback(
     async (showRefresh = false) => {
       if (!apiKey) {
@@ -227,6 +253,7 @@ export default function Positions() {
         if (response.status === 'success' && response.data) {
           setPositions(response.data)
           setError(null)
+          if (groupingRef.current === 'strategy') void fetchAttribution()
         } else {
           setError(response.message || 'Failed to fetch positions')
         }
@@ -237,8 +264,13 @@ export default function Positions() {
         setIsRefreshing(false)
       }
     },
-    [apiKey]
+    [apiKey, fetchAttribution]
   )
+
+  // Switching to the strategy grouping fetches the split straight away
+  useEffect(() => {
+    if (grouping === 'strategy') void fetchAttribution()
+  }, [grouping, fetchAttribution])
 
   // Initial fetch and visibility-aware polling
   // Pauses polling when tab is hidden to save resources
@@ -382,6 +414,10 @@ export default function Positions() {
       return { _all: sortedPositions }
     }
 
+    if (grouping === 'strategy') {
+      return groupByStrategy(sortedPositions, attribution)
+    }
+
     const groups: Record<string, Position[]> = {}
     sortedPositions.forEach((pos) => {
       const groupKey = getGroupKey(pos)
@@ -390,7 +426,7 @@ export default function Positions() {
     })
 
     return groups
-  }, [sortedPositions, grouping, getGroupKey])
+  }, [sortedPositions, grouping, getGroupKey, attribution])
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -602,6 +638,16 @@ export default function Positions() {
 
   return (
     <div className="space-y-6">
+      {/* Strategy split unavailable */}
+      {grouping === 'strategy' && attributionError && (
+        <Alert variant="default" className="bg-amber-500/10 border-amber-500/30">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-700 dark:text-amber-400">
+            Strategy split is unavailable right now, so every position is shown as Unattributed.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Stale Data Warning */}
       {showStaleWarning && (
         <Alert variant="default" className="bg-amber-500/10 border-amber-500/30">
@@ -670,6 +716,7 @@ export default function Positions() {
                       { value: 'none', label: 'None' },
                       { value: 'underlying', label: 'Underlying' },
                       { value: 'underlying_expiry', label: 'Underlying & Expiry' },
+                      { value: 'strategy', label: 'Strategy' },
                     ].map((opt) => (
                       <label
                         key={opt.value}
@@ -795,7 +842,12 @@ export default function Positions() {
           <span className="text-sm text-muted-foreground">Active Filters:</span>
           {grouping !== 'none' && (
             <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
-              Grouped: {grouping === 'underlying' ? 'Underlying' : 'Underlying & Expiry'}
+              Grouped:{' '}
+              {grouping === 'underlying'
+                ? 'Underlying'
+                : grouping === 'strategy'
+                  ? 'Strategy'
+                  : 'Underlying & Expiry'}
             </Badge>
           )}
           {!isCrypto &&
@@ -1071,7 +1123,7 @@ export default function Positions() {
                                   {calculatePnlPercent(position).toFixed(2)}%
                                 </TableCell>
                                 <TableCell className="w-[60px] text-right">
-                                  {isOpen && (
+                                  {isOpen && !position.sliced && (
                                     <Button
                                       variant="ghost"
                                       size="sm"

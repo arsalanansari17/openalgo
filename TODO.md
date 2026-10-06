@@ -34,6 +34,20 @@ never `origin` (upstream). Rollback branch on the fork: `upgrade-main-2026-09-27
   The retag ones contain credentials. Run `ls -la` there first and delete only
   those names.
 
+### Strategy view on Positions / Holdings (added 2026-10-06)
+Plan: `~/.claude/plans/let-s-first-make-a-tingly-wreath.md`. Source of truth is the strategy book
+(`strategy_positions`), via `POST /api/v1/pnl/attribution`. See SKYSHIELD_PATCHES.md 2026-10-06.
+- [ ] **Phase 1+2 built locally on `main`, uncommitted, not deployed** (2026-10-06). Next action: user reviews the
+  diff, commit, then deploy to acc1, acc2, acc3 only after 15:40 IST (never in market hours; VMs stop 16:15).
+- [ ] **Phase 0: check the book on each VM** (read-only): do `strategy_positions` legs match live holdings and
+  positions, and do legs still carry the old name `DonchianSwing` (the 10-01 retag may have missed
+  `strategy_positions` / `strategy_order_tags`)? Needs approval inside 08:30-15:30 IST.
+- [ ] Browser check after deploy: Positions > Filters > Grouping "Strategy"; Holdings > Filters > Strategy chips;
+  totals vs the broker's own; 390px width.
+- [ ] Phase 3: manual assignment for Unattributed (manual / pre-OpenAlgo holdings) via a fork-only overlay table
+  with an `upgrade/` migration. Decision pending.
+- [ ] Phase 4: AlgoMirror reads `/pnl/attribution` per account and drops its `position_tags` (see Algomirror/TODO.md).
+
 ### Mobile friendly (added 2026-10-01, user request)
 - [ ] Make the OpenAlgo web UI usable on a phone. Static audit done 2026-10-02: viewport tag is set
   and every daily-use page (Holdings, Positions, OrderBook, TradeBook, PnlHistory, OptionChain) already

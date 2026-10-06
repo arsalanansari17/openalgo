@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { tradingApi } from '@/api/trading'
+import { type StrategyAttribution, tradingApi, UNATTRIBUTED } from '@/api/trading'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -43,6 +43,7 @@ import { PlaceOrderDialog } from '@/components/trading'
 import { calculateLiveStats, useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
+import { narrowHoldingsToStrategy } from '@/lib/trading/strategyAttribution'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -135,6 +136,14 @@ export default function Holdings() {
   const [filters, setFilters] = useState<FilterState>({ hasT1: false, hasPledged: false })
   const [searchQuery, setSearchQuery] = useState('')
 
+  // Strategy split of the holdings (fork-only /pnl/attribution). `all` leaves
+  // the page exactly as the broker reports it.
+  const [strategyFilter, setStrategyFilter] = useState<string>('all')
+  const [attribution, setAttribution] = useState<StrategyAttribution | null>(null)
+  const [attributionError, setAttributionError] = useState<string | null>(null)
+  const strategyFilterRef = useRef('all')
+  strategyFilterRef.current = strategyFilter
+
   // Load/save preferences from localStorage
   useEffect(() => {
     try {
@@ -160,12 +169,14 @@ export default function Holdings() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ allocationBasis, filters }))
   }, [allocationBasis, filters])
 
-  const hasActiveFilters = filters.hasT1 || filters.hasPledged || searchQuery.trim() !== ''
+  const hasActiveFilters =
+    filters.hasT1 || filters.hasPledged || strategyFilter !== 'all' || searchQuery.trim() !== ''
   const toggleFilter = (key: keyof FilterState) => {
     setFilters((prev) => ({ ...prev, [key]: !prev[key] }))
   }
   const clearFilters = () => {
     setFilters({ hasT1: false, hasPledged: false })
+    setStrategyFilter('all')
     setSearchQuery('')
   }
 
@@ -187,8 +198,37 @@ export default function Holdings() {
     pauseWhenHidden: true,
   })
 
+  // With a strategy selected, everything below (rows, allocation, totals)
+  // works on that strategy's share of each holding instead of the broker's.
+  const scopedHoldings = useMemo(
+    () =>
+      strategyFilter === 'all'
+        ? enhancedHoldings
+        : narrowHoldingsToStrategy(enhancedHoldings, attribution, strategyFilter),
+    [enhancedHoldings, attribution, strategyFilter]
+  )
+
   // Calculate enhanced stats based on real-time data
   const enhancedStats = useMemo(() => {
+    if (strategyFilter !== 'all') {
+      // The broker's statistics cover the whole portfolio, so total the
+      // strategy's own rows. No day P&L: the split does not carry it.
+      const invested = scopedHoldings.reduce(
+        (sum, h) => sum + (h.quantity || 0) * (h.average_price || 0),
+        0
+      )
+      const current = scopedHoldings.reduce(
+        (sum, h) => sum + (h.quantity || 0) * (h.ltp ?? h.average_price ?? 0),
+        0
+      )
+      const pnl = current - invested
+      return {
+        totalinvvalue: invested,
+        totalholdingvalue: current,
+        totalprofitandloss: pnl,
+        totalpnlpercentage: invested > 0 ? (pnl / invested) * 100 : 0,
+      } satisfies HoldingsStats
+    }
     if (!stats) return stats
 
     // Check if any holding has live data
@@ -201,13 +241,13 @@ export default function Holdings() {
 
     // Recalculate stats with real-time data
     return calculateLiveStats(enhancedHoldings, stats)
-  }, [stats, enhancedHoldings])
+  }, [stats, enhancedHoldings, scopedHoldings, strategyFilter])
 
   // Derive per-row Invested/Current/Allocation from the live-priced holdings.
   // Invested and Current both use total quantity (free + T1 + pledged) since
   // pledged/T1 shares are still part of what you own and what you paid for them.
   const rows = useMemo(() => {
-    const withValues = enhancedHoldings.map((holding) => {
+    const withValues = scopedHoldings.map((holding) => {
       const qty = totalQty(holding)
       const ltp = holding.ltp ?? holding.average_price ?? 0
       return {
@@ -227,7 +267,7 @@ export default function Holdings() {
         allocation: totalBasis > 0 ? (basisValue / totalBasis) * 100 : 0,
       }
     })
-  }, [enhancedHoldings, allocationBasis])
+  }, [scopedHoldings, allocationBasis])
 
   // Filtering happens after allocation is computed against the full
   // portfolio, so a filtered view's percentages still add up meaningfully
@@ -320,6 +360,28 @@ export default function Holdings() {
     }
   }
 
+  const fetchAttribution = useCallback(async () => {
+    if (!apiKey) return
+    try {
+      const response = await tradingApi.getStrategyAttribution(apiKey, 'holdings')
+      if (response.status === 'success' && response.data) {
+        setAttribution(response.data)
+        setAttributionError(null)
+      } else {
+        setAttribution(null)
+        setAttributionError(response.message || 'Strategy split unavailable')
+      }
+    } catch {
+      setAttribution(null)
+      setAttributionError('Strategy split unavailable')
+    }
+  }, [apiKey])
+
+  // Load the split once so the strategy list is ready when the filter opens
+  useEffect(() => {
+    void fetchAttribution()
+  }, [fetchAttribution])
+
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
       if (!apiKey) {
@@ -335,6 +397,7 @@ export default function Holdings() {
           setHoldings(response.data.holdings || [])
           setStats(response.data.statistics)
           setError(null)
+          if (strategyFilterRef.current !== 'all') void fetchAttribution()
         } else {
           setError(response.message || 'Failed to fetch holdings')
         }
@@ -345,7 +408,7 @@ export default function Holdings() {
         setIsRefreshing(false)
       }
     },
-    [apiKey]
+    [apiKey, fetchAttribution]
   )
 
   // Initial fetch and visibility-aware polling
@@ -567,6 +630,40 @@ export default function Holdings() {
 
                 <div className="space-y-3">
                   <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Strategy
+                  </Label>
+                  {attributionError ? (
+                    <p className="text-xs text-muted-foreground">
+                      Strategy split is unavailable right now.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {['all', ...(attribution?.strategies ?? []), UNATTRIBUTED].map((name) => (
+                        <Button
+                          key={name}
+                          variant={strategyFilter === name ? 'default' : 'outline'}
+                          size="sm"
+                          className={cn(
+                            'rounded-full',
+                            strategyFilter === name && 'bg-pink-500 hover:bg-pink-600'
+                          )}
+                          onClick={() => setStrategyFilter(name)}
+                        >
+                          {name === 'all' ? 'All' : name}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Shows only the quantity each strategy owns. Unattributed is whatever no
+                    strategy claims, such as manual buys.
+                  </p>
+                </div>
+
+                <div className="border-t" />
+
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Allocation Basis
                   </Label>
                   <div className="flex flex-wrap gap-2">
@@ -632,6 +729,11 @@ export default function Holdings() {
           {filters.hasPledged && (
             <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
               Has Pledged Quantity
+            </Badge>
+          )}
+          {strategyFilter !== 'all' && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              Strategy: {strategyFilter}
             </Badge>
           )}
           {searchQuery.trim() !== '' && (

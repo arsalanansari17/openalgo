@@ -6,6 +6,38 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-06 - Positions grouped by strategy, Holdings filtered by strategy (`/pnl/attribution`)
+
+**Files:** `services/strategy_attribution.py` (new, pure), `services/pnl_history_service.py` (`get_strategy_attribution`),
+`restx_api/pnl_history.py` + `pnl_history_schema.py` (`POST /api/v1/pnl/attribution`), `test/test_strategy_attribution.py`
+(new), `frontend/src/lib/trading/strategyAttribution.ts` + test (new), `frontend/src/pages/Positions.tsx`,
+`frontend/src/pages/Holdings.tsx`, `frontend/src/api/trading.ts`. **Upstream:** fork-only, not for upstream. Upstream's
+`/positionbook` and `/holdings` responses are untouched; the two pages are upstream files with additive changes.
+
+**Problem.** The broker nets positions per symbol and carries no strategy, so Positions and Holdings could not show
+who owns what. The strategy book (`strategy_positions`, upstream) already keeps net quantity and average price per
+(strategy, symbol, exchange, product) and never expires, unlike `strategy_order_tags` (30 days) and the
+`tradebook_fills` ledger (16:00 capture), so it is the source, not the ledger.
+
+**Fix.** One pure function decides attribution: each broker row becomes per-strategy slices (quantity, average price,
+today's realized P&L) plus an `Unattributed` remainder, so slices never exceed the broker quantity. Strategies
+hedging each other on one contract (A long 100, B short 40, broker net +60) keep their gross quantities when their
+signed sum reconciles with the broker net. A book that disagrees with the broker (net on the other side, or larger)
+is capped and flagged `mismatch` rather than being netted silently. A flat leg that realized P&L today is a
+zero-quantity slice so an intraday exit stays under its strategy. Holdings total = free + T1 + pledged and match
+only CNC legs. The endpoint returns 503 when the book is unavailable (never "all unattributed"). Positions gets a
+"Strategy" grouping (slice P&L = qty x (LTP - avg) + realized today; the leftover to broker P&L stays on
+Unattributed so group totals equal the broker total; Close is hidden on slice rows because it closes the whole
+position). Holdings gets a Strategy chip filter; rows and totals are recomputed from the strategy's share.
+
+**Verified (local, 2026-10-06).** 33 backend tests and 8 frontend tests pass; `tsc` clean; Positions test still
+passes. NOT yet verified: against real `strategy_positions` on a VM (plan Phase 0), or in a browser.
+
+**Next steps.** Phase 0 check of the book on each VM; Phase 3 manual assignment for Unattributed (overlay table);
+then AlgoMirror reads this endpoint and drops `position_tags`.
+
+---
+
 ## 2026-10-05 - Kotak: unique `ig` per order (fixed tag rejected every order after the first)
 
 **Files:** `broker/kotak/mapping/transform_data.py`, `test/test_kotak_order_tag.py` (new). **Upstream:** issue #2177,

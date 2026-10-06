@@ -91,6 +91,36 @@ export interface StrategyLeg {
   updated_at: string | null
 }
 
+/** One strategy's share of a broker position or holding. `strategy` is "Unattributed" for the remainder no leg explains. */
+export interface StrategySlice {
+  strategy: string
+  quantity: number
+  average_price: number
+  /** Realized today by this strategy on this contract (positions only); a flat slice carries just this. */
+  today_realized_pnl: number
+  attributed: boolean
+}
+
+/** A broker row (position or holding) split into strategy slices (services/strategy_attribution.py). */
+export interface AttributedRow {
+  symbol: string
+  exchange: string
+  product: string
+  quantity: number
+  average_price: number
+  slices: StrategySlice[]
+  mismatch: boolean
+  mismatch_reason: string | null
+}
+
+export interface StrategyAttribution {
+  kind: 'positions' | 'holdings'
+  rows: AttributedRow[]
+  strategies: string[]
+}
+
+export const UNATTRIBUTED = 'Unattributed'
+
 export interface DepthData {
   asks: DepthLevel[]
   bids: DepthLevel[]
@@ -340,6 +370,24 @@ export const tradingApi = {
   ): Promise<ApiResponse<StrategyLeg[]>> => {
     const response = await apiClient.get<ApiResponse<StrategyLeg[]>>('/pnl/strategy-legs', {
       params: { apikey: apiKey, strategy: strategy || undefined },
+    })
+    return response.data
+  },
+
+  /**
+   * Live positions or holdings split into per-strategy slices (fork-only,
+   * services/strategy_attribution.py). Whatever no strategy leg explains comes
+   * back as an "Unattributed" slice. Fails (503) when the strategy book is
+   * unavailable - callers should treat that as "no strategy view", not "all
+   * unattributed".
+   */
+  getStrategyAttribution: async (
+    apiKey: string,
+    kind: 'positions' | 'holdings'
+  ): Promise<ApiResponse<StrategyAttribution>> => {
+    const response = await apiClient.post<ApiResponse<StrategyAttribution>>('/pnl/attribution', {
+      apikey: apiKey,
+      kind,
     })
     return response.data
   },

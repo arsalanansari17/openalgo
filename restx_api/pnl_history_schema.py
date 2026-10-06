@@ -47,6 +47,11 @@ class PnlStrategyLegsSchema(Schema):
     strategy = fields.Str(required=False, load_default=None)
 
 
+class PnlAttributionSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    kind = fields.Str(required=True, validate=validate.OneOf(["positions", "holdings"]))
+
+
 class PnlSetTradeStrategySchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True, validate=validate.Length(min=1, max=120))

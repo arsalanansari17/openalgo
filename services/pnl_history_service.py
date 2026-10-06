@@ -592,6 +592,52 @@ def get_strategy_legs(api_key: str, strategy: str | None = None):
         return False, {"status": "error", "message": str(e)}, 500
 
 
+def get_strategy_attribution(api_key: str, kind: str):
+    """Live positions or holdings split into per-strategy slices.
+
+    Reads the broker's own rows (positionbook / holdings services) and the
+    strategy book's legs, and joins them with services/strategy_attribution.py
+    - the single place that decides who owns what. Upstream's /positionbook
+    and /holdings responses are left untouched.
+    """
+    from database.strategy_book_db import get_strategy_legs as _get_strategy_legs
+    from services.holdings_service import get_holdings
+    from services.positionbook_service import get_positionbook
+    from services.strategy_attribution import KIND_HOLDINGS, KIND_POSITIONS, attribute
+
+    if kind not in (KIND_POSITIONS, KIND_HOLDINGS):
+        return False, {"status": "error", "message": "kind must be positions or holdings"}, 400
+
+    auth_token, broker = get_auth_token_broker(api_key)
+    if not auth_token:
+        return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+
+    try:
+        # An unreadable book is unknown, not empty: reporting everything as
+        # unattributed would look like a healthy answer.
+        try:
+            legs = _get_strategy_legs()
+        except StrategyBookUnavailable as e:
+            return False, {"status": "error", "message": str(e)}, 503
+
+        if kind == KIND_POSITIONS:
+            success, response, status_code = get_positionbook(api_key=api_key)
+        else:
+            success, response, status_code = get_holdings(api_key=api_key)
+        if not success:
+            return False, response, status_code
+
+        data = response.get("data")
+        rows = data.get("holdings") if kind == KIND_HOLDINGS and isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            rows = []
+
+        return True, {"status": "success", "data": attribute(rows, legs, kind)}, 200
+    except Exception as e:
+        logger.exception(f"Error computing strategy attribution: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
+
+
 def set_trade_strategy(api_key: str, trade_id: int, strategy: str):
     """Manual strategy-tag fallback for one historical trade row - for
     CSV-imported history and any trade with no orderid to automatically

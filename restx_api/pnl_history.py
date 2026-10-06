@@ -15,6 +15,8 @@ restx_api/pnl_symbols.py or account_schema.py changes.
     POST /api/v1/pnl/import   - backfill the ledger from an exported
                                  tradebook CSV, for history predating the
                                  daily capture job
+    POST /api/v1/pnl/attribution - live positions or holdings split into
+                                 per-strategy slices (strategy book join)
 """
 
 import csv
@@ -29,6 +31,7 @@ from limiter import limiter
 from services.pnl_history_service import (
     get_pnl_history,
     get_pnl_trades,
+    get_strategy_attribution,
     get_strategy_legs,
     import_kotak_statement,
     import_trades_csv,
@@ -38,6 +41,7 @@ from utils.kotak_statement import is_kotak_statement
 from utils.logging import get_logger
 
 from .pnl_history_schema import (
+    PnlAttributionSchema,
     PnlHistorySchema,
     PnlImportSchema,
     PnlSetTradeStrategySchema,
@@ -56,6 +60,7 @@ logger = get_logger(__name__)
 pnl_history_schema = PnlHistorySchema()
 pnl_import_schema = PnlImportSchema()
 pnl_strategy_legs_schema = PnlStrategyLegsSchema()
+pnl_attribution_schema = PnlAttributionSchema()
 pnl_set_trade_strategy_schema = PnlSetTradeStrategySchema()
 
 # Column-name aliases across broker tradebook CSV exports. Modeled on
@@ -281,6 +286,29 @@ class PnlStrategyLegs(Resource):
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
             logger.exception(f"Unexpected error in pnl/strategy-legs endpoint: {e}")
+            return make_response(
+                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
+            )
+
+
+@api.route("/attribution", strict_slashes=False)
+class PnlAttribution(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    def post(self):
+        """Live positions or holdings split into per-strategy slices, with an
+        Unattributed remainder - see services/strategy_attribution.py. Body:
+        {apikey, kind: "positions" | "holdings"}.
+        """
+        try:
+            data = pnl_attribution_schema.load(request.json or {})
+            success, response_data, status_code = get_strategy_attribution(
+                api_key=data["apikey"], kind=data["kind"]
+            )
+            return make_response(jsonify(response_data), status_code)
+        except ValidationError as err:
+            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
+        except Exception as e:
+            logger.exception(f"Unexpected error in pnl/attribution endpoint: {e}")
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )
