@@ -6,6 +6,38 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-06 - P&L Tracker: P&L | M2M curve, per symbol and product
+
+**Files:** `services/pnl_tracker_m2m.py` (new), `blueprints/pnltracker.py` (33 added lines, nothing removed: a hook
+before the original computation), `test/test_pnl_tracker_m2m.py` (new), `frontend/src/pages/PnLTracker.tsx` (a
+switch, labels, and the basis sent with the request), `PnLTracker.test.tsx` (new). **Upstream:** the bug is in upstream code; issue
+to file (draft in `SkyShieldEdge/UPSTREAM_ISSUE_pnltracker_draft.md` (outside the repo)), not blocking trading. The fork patch is a hook that leaves
+upstream's code intact as the fallback, so an upstream fix will take over cleanly.
+
+**Problem.** `get_pnl_data` keys positions and trades by `symbol_exchange` only, with no product. On acc1 on 2026-10-06
+IronCondor's MIS trades and ExpiryFade's NRML exit on NIFTY06OCT2622350PE were mixed, and the exit-only SELL of a
+position carried from the previous day was valued as a new short marked to the last price (+39) instead of closing the
+carried long. The tracker showed 15,489.50 for a day whose fills total 9,834.50 (today's M2M is 10,887.50). For a
+carried position closed today it also takes the broker's own `pnl`, which on Zerodha can carry a wrong cost (59.45
+instead of the real fill 29.05 on that contract) and rebuilds the entry price from it.
+
+**Fix.** `build_m2m_tracker_response` builds the curve per (symbol, exchange, product) on the chosen basis, as on the
+Positions page: `pnl` (default; the broker's own figure, a carried position's cost taken from it so the curve ends on
+the Positions P&L) or `m2m` (today's move). The M2M formula is the Positions page's (services/position_m2m.py): fills up to each minute, plus (overnight qty + net fills) x the minute's
+close, minus overnight qty x the previous close. The last point is the Positions page's own figure for the same basis, so
+"Current" here and "Total" there are the same number. The request carries `basis` (default `pnl`); the page has the same
+"Today's M2M" switch as Positions and remembers it. It returns None, and upstream's original code runs, for anything it cannot do
+exactly: an exchange with a price multiplier (MCX, CDS), an unreadable fill time, a missing previous close or candle
+history, or a failed quotes call.
+
+**Verified (2026-10-06).** 21 unit tests (the exact 22350PE case, two products on one contract, both bases, every
+fallback) and 3 page tests. Replayed on acc1 with the real positions, tradebook, quotes and 1-minute candles: P&L basis
+ends on 3,906.50 (the Positions P&L; low -4,797.00 at 09:15, peak 3,955.25 at 15:08) and M2M basis on 10,887.50 (the
+Positions M2M; low 2,184 at 09:15, peak 10,936.25 at 15:08); 376 points each; the old chart also peaked at 15:08 and
+bottomed at 09:15. NOT yet verified in the browser or deployed.
+
+---
+
 ## 2026-10-06 - Positions: P&L | M2M switch (today's move, from fills and yesterday's close)
 
 **Files:** `services/position_m2m.py` (new, pure), `services/pnl_history_service.py` (`_m2m_for_positions`, `include_m2m`),

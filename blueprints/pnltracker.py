@@ -255,11 +255,13 @@ def get_pnl_data():
         from services.positionbook_service import get_positionbook
 
         current_positions = {}
+        tracker_positions = []  # fork patch: raw rows for services/pnl_tracker_m2m.py
         try:
             success, positions_response, _ = get_positionbook(api_key=api_key)
 
             if success and "data" in positions_response:
                 positions_data = positions_response.get("data", [])
+                tracker_positions = list(positions_data or [])
 
                 # Store current positions for reference
                 logger.info(f"Number of positions: {len(positions_data) if positions_data else 0}")
@@ -308,6 +310,37 @@ def get_pnl_data():
                     },
                 }
             ), 200
+
+        # Fork patch (SKYSHIELD_PATCHES.md): the curve on the chosen basis (the
+        # broker's P&L or today's M2M), per symbol AND product, from the same formula
+        # as the Positions page. It returns None whenever it cannot be exact, and
+        # the original code below runs instead.
+        try:
+            from services.pnl_tracker_m2m import build_m2m_tracker_response
+            from services.quotes_service import get_multiquotes
+
+            # "m2m" = today's move only; anything else = the broker's own P&L (the
+            # default, so a caller that sends nothing sees the Positions page's basis).
+            requested_basis = (request.get_json(silent=True) or {}).get(
+                "basis"
+            ) or request.args.get("basis")
+
+            m2m_response = build_m2m_tracker_response(
+                basis="m2m" if requested_basis == "m2m" else "pnl",
+                api_key=api_key,
+                positions=tracker_positions,
+                trades=trades,
+                parse_time=parse_trade_timestamp,
+                to_ist=convert_timestamp_to_ist,
+                rate_limiter=history_rate_limiter,
+                get_history_fn=get_history,
+                get_multiquotes_fn=get_multiquotes,
+            )
+        except Exception as e:
+            logger.exception(f"M2M tracker failed, using the built-in curve: {e}")
+            m2m_response = None
+        if m2m_response is not None:
+            return jsonify({"status": "success", "data": m2m_response}), 200
 
         # Process trades to build portfolio MTM
         portfolio_pnl = None

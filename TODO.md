@@ -48,11 +48,15 @@ Plan: `~/.claude/plans/let-s-first-make-a-tingly-wreath.md`. Source of truth is 
   figure (default); M2M = today's move from fills and yesterday's close, verified exact against Zerodha (acc1) and
   Kotak (acc3) on real rows. Next action: user reviews the diff, commit, deploy after 15:40 IST, then check in the
   browser (Positions > P&L | M2M).
-- [ ] **P&L Tracker (`/pnl-tracker`, `blueprints/pnltracker.py`) is wrong on a carried position** (2026-10-06): it keys
-  positions by symbol only (IronCondor MIS + ExpiryFade NRML on one contract get mixed) and treats a carried exit as a
-  new short; it showed 15,489.50 where the fills total 9,834.50. Next action: file the upstream issue with the
-  traceback and numbers, then a logged fork patch (group by symbol and product, use the M2M basis). Does not block
-  trading, so no rush.
+- [ ] **P&L Tracker with the P&L | M2M switch built locally** (2026-10-06): `services/pnl_tracker_m2m.py` + a 33-line hook in
+  `blueprints/pnltracker.py` + a switch on the page; replayed on acc1 with real data (P&L basis ends on 3,906.50, M2M on
+  10,887.50, each equal to the Positions page). Next action: deploy after 15:40 IST, check `/pnl-tracker` in the browser.
+  Then file the upstream issue (draft: `../UPSTREAM_ISSUE_pnltracker_draft.md`; needs the user's OK to post publicly).
+- [x] **Flow Position Check (`pnl_above` / `pnl_below`) stays on the broker's P&L, by decision** (2026-10-06): it is a
+  risk rule that other people's flows rely on, so the P&L | M2M switch must not change it.
+- [ ] **Other places that show a position P&L, not yet decided** (2026-10-06): Telegram `/pnl` and WhatsApp `/pnl`
+  (broker figure; could show M2M too) and the trading terminal blotter (not yet looked at). Holdings, Tradebook and P&L
+  History do not need it.
 - [ ] Open question for the strategy book: a manual exit (22450PE, 2026-10-06) leaves a stale open leg (IronCondor -65)
   in `strategy_positions`. Phase 3 manual assignment should be able to close such a leg.
 - [ ] Phase 3: manual assignment for Unattributed (manual / pre-OpenAlgo holdings) via a fork-only overlay table
