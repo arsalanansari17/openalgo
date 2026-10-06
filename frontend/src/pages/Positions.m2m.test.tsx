@@ -84,7 +84,7 @@ async function renderPage() {
   await screen.findByText(CARRIED.symbol)
 }
 
-describe('Positions P&L | M2M switch', () => {
+describe('Positions M2M switch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
@@ -110,7 +110,7 @@ describe('Positions P&L | M2M switch', () => {
     )
     await renderPage()
 
-    await userEvent.click(screen.getByRole('button', { name: 'M2M' }))
+    await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
 
     await waitFor(() =>
       expect(mocks.getStrategyAttribution).toHaveBeenCalledWith('test-api-key', 'positions', true)
@@ -126,7 +126,7 @@ describe('Positions P&L | M2M switch', () => {
     })
     await renderPage()
 
-    await userEvent.click(screen.getByRole('button', { name: 'M2M' }))
+    await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
 
     expect(await screen.findByText(/could not be worked out for 1 of 1/)).toBeInTheDocument()
     expect(screen.getAllByText(/11,544/).length).toBeGreaterThan(0)
@@ -145,7 +145,7 @@ describe('Positions P&L | M2M switch', () => {
     )
     await renderPage()
 
-    await userEvent.click(screen.getByRole('button', { name: 'M2M' }))
+    await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
 
     expect(await screen.findByText(/already its M2M/)).toBeInTheDocument()
   })
@@ -160,7 +160,7 @@ describe('Positions P&L | M2M switch', () => {
       })
     )
     await renderPage()
-    await userEvent.click(screen.getByRole('button', { name: 'M2M' }))
+    await userEvent.click(screen.getByRole('switch', { name: /M2M/ }))
 
     await waitFor(() =>
       expect(JSON.parse(localStorage.getItem('openalgo_positions_prefs') ?? '{}').pnlBasis).toBe(

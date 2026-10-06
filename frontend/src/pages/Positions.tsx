@@ -43,6 +43,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -735,28 +736,21 @@ export default function Positions() {
           <p className="text-muted-foreground">Monitor and manage your active trading positions</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* P&L basis: the broker's own P&L, or today's move only (M2M) */}
-          <fieldset
-            className="m-0 inline-flex min-w-0 rounded-md border p-0"
-            title="P&L is the broker's own figure. M2M is today's move only: carried positions are measured from yesterday's close."
+          {/* P&L basis: off = the broker's own P&L, on = today's move only (M2M) */}
+          <div
+            className="flex items-center gap-2"
+            title="Off: the broker's own P&L. On: today's M2M, where carried positions are measured from yesterday's close."
           >
-            <legend className="sr-only">P&L basis</legend>
-            {(['pnl', 'm2m'] as const).map((basis) => (
-              <Button
-                key={basis}
-                variant={pnlBasis === basis ? 'default' : 'ghost'}
-                size="sm"
-                className={cn(
-                  'rounded-none first:rounded-l-md last:rounded-r-md',
-                  pnlBasis === basis && 'bg-pink-500 hover:bg-pink-600'
-                )}
-                aria-pressed={pnlBasis === basis}
-                onClick={() => setPnlBasis(basis)}
-              >
-                {basis === 'pnl' ? 'P&L' : 'M2M'}
-              </Button>
-            ))}
-          </fieldset>
+            <Label htmlFor="positions-m2m" className="cursor-pointer text-sm">
+              Today's M2M
+            </Label>
+            <Switch
+              id="positions-m2m"
+              checked={pnlBasis === 'm2m'}
+              onCheckedChange={(on) => setPnlBasis(on ? 'm2m' : 'pnl')}
+              className="data-[state=checked]:bg-pink-500"
+            />
+          </div>
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
