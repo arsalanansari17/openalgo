@@ -12,6 +12,7 @@ extended from one trading day to an arbitrary date range.
 """
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_
 
@@ -41,6 +42,68 @@ logger = get_logger(__name__)
 # expiry-bounded segments.
 _FNO_LOOKBACK_DAYS = 365
 _LONG_HOLD_SEGMENTS = ("equity", "mutual_fund")
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _open_positions_with_unrealised(api_key, open_positions, end_date):
+    """Open FIFO positions plus their unrealized P&L at the live LTP.
+
+    Returns (rows, total_unrealised_pnl_or_None). Unrealized P&L is only
+    meaningful as of now, so it is computed only when the requested range
+    ends today or later (IST); for an earlier end date every row carries
+    ltp/unrealized_pnl of None and the total is None. A position whose quote
+    cannot be fetched (an expired contract, a broker error) also carries
+    None and is left out of the total - the report never fails on a quote.
+    """
+    rows = [
+        {
+            "symbol": pos.symbol,
+            "exchange": pos.exchange,
+            "product": pos.product,
+            "action": pos.action,
+            "quantity": pos.quantity,
+            "average_price": round(pos.average_price, 2),
+            "ltp": None,
+            "unrealized_pnl": None,
+        }
+        for pos in open_positions
+    ]
+    if end_date < datetime.now(_IST).date().isoformat():
+        return rows, None
+    if not rows:
+        return rows, 0.0
+
+    try:
+        from services.quotes_service import get_multiquotes
+
+        wanted = [{"symbol": r["symbol"], "exchange": r["exchange"]} for r in rows]
+        # Distinct symbols only: one position per symbol+exchange+product, but
+        # several products can share a symbol.
+        wanted = [dict(t) for t in {tuple(w.items()) for w in wanted}]
+        ok, response, _status = get_multiquotes(wanted, api_key=api_key)
+        if not ok:
+            return rows, None
+
+        ltps = {}
+        for item in response.get("results", []):
+            data = item.get("data")
+            if isinstance(data, dict) and data.get("ltp"):
+                ltps[(item.get("symbol"), item.get("exchange"))] = float(data["ltp"])
+
+        total = 0.0
+        for r in rows:
+            ltp = ltps.get((r["symbol"], r["exchange"]))
+            if ltp is None:
+                continue
+            sign = 1 if r["action"] == "BUY" else -1
+            r["ltp"] = round(ltp, 2)
+            r["unrealized_pnl"] = round(sign * (ltp - r["average_price"]) * r["quantity"], 2)
+            total += r["unrealized_pnl"]
+        return rows, round(total, 2)
+    except Exception:
+        logger.exception("Could not fetch quotes for unrealized P&L")
+        return rows, None
 
 
 def _parse_range_and_build_query(
@@ -194,6 +257,9 @@ def get_pnl_history(
             if lot.exit_timestamp and start_date <= str(lot.exit_timestamp)[:10] <= end_date
         ]
         daily = summarize_by_day(lots_in_range)
+        open_rows, total_unrealised = _open_positions_with_unrealised(
+            api_key, result.open_positions, end_date
+        )
 
         # Raw-fill count inside the requested range specifically (not the
         # wider fifo_lookback query above) - matches what "N trades this
@@ -234,17 +300,10 @@ def get_pnl_history(
                         }
                         for lot in lots_in_range
                     ],
-                    "open_positions": [
-                        {
-                            "symbol": pos.symbol,
-                            "exchange": pos.exchange,
-                            "product": pos.product,
-                            "action": pos.action,
-                            "quantity": pos.quantity,
-                            "average_price": round(pos.average_price, 2),
-                        }
-                        for pos in result.open_positions
-                    ],
+                    "open_positions": open_rows,
+                    # None when the range ends before today: unrealized P&L
+                    # exists only at the live LTP.
+                    "total_unrealized_pnl": total_unrealised,
                 },
             },
             200,

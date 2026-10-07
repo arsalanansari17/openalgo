@@ -1,21 +1,33 @@
 // frontend/src/pages/PnlHistory.tsx
 /**
- * Consolidated multi-day realized P&L report (fork-only feature, see
- * openalgo's SKYSHIELD_PATCHES.md and docs/design/56-pnl-history). Modeled
- * on Zerodha Console's own Tradebook/P&L report pair under "Reports" -
- * date range in, FIFO-matched realized P&L out. Nothing here is
- * precomputed: every fetch re-runs utils/pnl_fifo.py server-side against
- * the raw fill ledger (compute-on-read, same philosophy as the built-in
- * intraday PnL Tracker).
+ * Consolidated multi-day P&L report (fork-only feature, see openalgo's
+ * SKYSHIELD_PATCHES.md and docs/design/56-pnl-history). Modeled on Zerodha
+ * Console's own Tradebook/P&L report pair under "Reports" - date range in,
+ * FIFO-matched realized P&L out, plus unrealized P&L on the positions still
+ * open at the live LTP. Nothing here is precomputed: every fetch re-runs
+ * utils/pnl_fifo.py server-side against the raw fill ledger (compute-on-read,
+ * same philosophy as the built-in intraday PnL Tracker).
  */
-import { Loader2, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
-import type { PnlHistoryClosedTrade, PnlHistoryDailyRow } from '@/api/trading'
+import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import type {
+  PnlHistoryClosedTrade,
+  PnlHistoryOpenPosition,
+} from '@/api/trading'
 import { tradingApi } from '@/api/trading'
 import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
 import { DateRangePresets } from '@/components/reports/DateRangePresets'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -34,10 +46,18 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { cn, makeFormatCurrency } from '@/lib/utils'
+import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import type { Segment } from '@/types/trading'
 import { showToast } from '@/utils/toast'
+
+type PnlMode = 'combined' | 'realized' | 'unrealized'
+
+const PNL_MODE_LABEL: Record<PnlMode, string> = {
+  combined: 'Combined',
+  realized: 'Realized P&L',
+  unrealized: 'Unrealized P&L',
+}
 
 function defaultStartDate(): string {
   const d = new Date()
@@ -49,15 +69,29 @@ function defaultEndDate(): string {
   return new Date().toISOString().split('T')[0]
 }
 
+interface DayRow {
+  date: string
+  realized: number
+  unrealized: number | null
+  cumulative: number
+}
+
 interface ScripRow {
+  key: string
   symbol: string
   exchange: string
   product: string | null
-  quantity: number
+  // Closed-lot side
+  closedQuantity: number
   buyValue: number
   sellValue: number
-  realizedPnl: number
-  tradeCount: number
+  realized: number
+  // Open-position side
+  openQuantity: number
+  averagePrice: number | null
+  ltp: number | null
+  unrealized: number | null
+  cumulative: number
 }
 
 // Green/red-by-realized-P&L, matching Zerodha Console's own P&L heat map:
@@ -70,57 +104,69 @@ function pnlHeatColor(value: number, maxAbs: number): string {
   return value > 0 ? `rgba(34, 197, 94, ${alpha})` : `rgba(239, 68, 68, ${alpha})`
 }
 
+function scripKey(symbol: string, exchange: string, product: string | null): string {
+  return `${symbol}|${exchange}|${product ?? ''}`
+}
+
+function toggle(list: string[], value: string): string[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
+}
+
 export default function PnlHistory() {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = makeFormatCurrency(user?.broker)
 
+  // Applied fetch parameters. The Fetch dialog edits drafts (d*) and applies
+  // them together, so nothing changes until the user clicks Fetch there.
   const [segment, setSegment] = useState<'all' | Segment>('all')
-  const [symbol, setSymbol] = useState('')
-  // Strategy names are open-ended (SkyShieldAT's own strategies, plus
-  // OpenAlgo's Holdings-page "Holdings" placeholder - see
-  // SKYSHIELD_PATCHES.md), so the dropdown is populated dynamically from
-  // this account's own strategy book rather than a fixed enum like
-  // Segment.
-  const [strategy, setStrategy] = useState<'all' | string>('all')
-  const [strategyOptions, setStrategyOptions] = useState<string[]>([])
   const [startDate, setStartDate] = useState(defaultStartDate())
   const [endDate, setEndDate] = useState(defaultEndDate())
+  const [pnlMode, setPnlMode] = useState<PnlMode>('combined')
+
+  const [fetchOpen, setFetchOpen] = useState(false)
+  const [dSegment, setDSegment] = useState<'all' | Segment>('all')
+  const [dStart, setDStart] = useState(startDate)
+  const [dEnd, setDEnd] = useState(endDate)
+  const [dMode, setDMode] = useState<PnlMode>('combined')
   const [activeDatePreset, setActiveDatePreset] = useState<string | null>(null)
+
   const [isLoading, setIsLoading] = useState(false)
   const [hasFetched, setHasFetched] = useState(false)
-  const [totalRealizedPnl, setTotalRealizedPnl] = useState(0)
-  const [tradeCount, setTradeCount] = useState(0)
-  const [daily, setDaily] = useState<PnlHistoryDailyRow[]>([])
   const [closedTrades, setClosedTrades] = useState<PnlHistoryClosedTrade[]>([])
+  const [openPositions, setOpenPositions] = useState<PnlHistoryOpenPosition[]>([])
+  // null when the range ends before today (unrealized P&L exists only at the
+  // live LTP) or when the quotes could not be fetched.
+  const [unrealizedAvailable, setUnrealizedAvailable] = useState(false)
   const [view, setView] = useState<'day' | 'scrip'>('day')
 
-  // Optional overrides let a date-range preset fetch immediately with the
-  // range it just picked, rather than the (stale, pre-setState) closure
-  // values of startDate/endDate.
-  const fetchHistory = async (overrideStart?: string, overrideEnd?: string) => {
-    const effectiveStart = overrideStart ?? startDate
-    const effectiveEnd = overrideEnd ?? endDate
+  // Table filters (client-side, applied to whichever table is showing).
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [symbolFilter, setSymbolFilter] = useState('')
+  const [exchangeFilter, setExchangeFilter] = useState<string[]>([])
+  const [productFilter, setProductFilter] = useState<string[]>([])
+
+  const showRealized = pnlMode !== 'unrealized'
+  const showUnrealized = pnlMode !== 'realized'
+
+  const loadHistory = async (start: string, end: string, seg: 'all' | Segment) => {
     if (!apiKey) {
       showToast.error('API key not available', 'system')
       return
     }
-    if (!effectiveStart || !effectiveEnd) {
+    if (!start || !end) {
       showToast.warning('Select both a start and end date', 'system')
       return
     }
 
     setIsLoading(true)
     try {
-      const response = await tradingApi.getPnlHistory(apiKey, effectiveStart, effectiveEnd, {
-        symbol: symbol.trim().toUpperCase(),
-        segment: segment === 'all' ? undefined : segment,
-        strategy: strategy === 'all' ? undefined : strategy,
+      const response = await tradingApi.getPnlHistory(apiKey, start, end, {
+        segment: seg === 'all' ? undefined : seg,
       })
       if (response.status === 'success' && response.data) {
-        setTotalRealizedPnl(response.data.total_realized_pnl)
-        setTradeCount(response.data.trade_count)
-        setDaily(response.data.daily)
         setClosedTrades(response.data.closed_trades)
+        setOpenPositions(response.data.open_positions)
+        setUnrealizedAvailable(response.data.total_unrealized_pnl != null)
         setHasFetched(true)
       } else {
         showToast.error(response.message || 'Failed to load P&L history', 'system')
@@ -132,81 +178,256 @@ export default function PnlHistory() {
     }
   }
 
-  const handleDatePresetSelect = (start: string, end: string, key: string) => {
-    setStartDate(start)
-    setEndDate(end)
-    setActiveDatePreset(key)
-    fetchHistory(start, end)
+  const applyFetch = () => {
+    setSegment(dSegment)
+    setStartDate(dStart)
+    setEndDate(dEnd)
+    setPnlMode(dMode)
+    setFetchOpen(false)
+    loadHistory(dStart, dEnd, dSegment)
   }
 
-  // Populates the Strategy filter's options - fetched once on mount rather
-  // than re-derived from each report's own results, so the dropdown always
-  // shows every strategy this account has ever tracked, not just the ones
-  // present in whatever date range happens to be selected right now.
-  useEffect(() => {
-    if (!apiKey) return
-    tradingApi
-      .getStrategyLegs(apiKey)
-      .then((response) => {
-        if (response.status === 'success' && response.data) {
-          const names = Array.from(new Set(response.data.map((leg) => leg.strategy))).sort()
-          setStrategyOptions(names)
-        }
-      })
-      .catch(() => {
-        // Best-effort - the strategy book being unavailable shouldn't block
-        // the rest of the page; the filter just has no options to offer.
-      })
-  }, [apiKey])
+  const handleDatePresetSelect = (start: string, end: string, key: string) => {
+    setDStart(start)
+    setDEnd(end)
+    setActiveDatePreset(key)
+  }
 
-  const pnlColorClass = totalRealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'
-
-  const heatmapDays: CalendarHeatmapDay[] = useMemo(
+  // Filter options come from whatever the report returned.
+  const exchangeOptions = useMemo(
     () =>
-      daily.map((row) => ({
-        date: row.date,
-        value: row.realized_pnl,
-        tooltip: `${row.date}: ${formatCurrency(row.realized_pnl)} (${row.trade_count} trade${row.trade_count === 1 ? '' : 's'})`,
-      })),
-    [daily, formatCurrency]
+      Array.from(
+        new Set([...closedTrades.map((t) => t.exchange), ...openPositions.map((p) => p.exchange)])
+      ).sort(),
+    [closedTrades, openPositions]
+  )
+  const productOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...closedTrades.map((t) => t.product), ...openPositions.map((p) => p.product)].filter(
+            (p): p is string => !!p
+          )
+        )
+      ).sort(),
+    [closedTrades, openPositions]
   )
 
-  // Scrip-wise view: merges every FIFO-matched lot for the same
-  // symbol+exchange+product into one row, matching the Scrip-wise
-  // aggregation every broker's own P&L report uses (Zerodha Console's Tax
-  // P&L equity sheet, for one, reports buy value/sell value/P&L per scrip
-  // rather than per lot). `entry_action` tells direction per lot - a BUY
+  const hasActiveFilters =
+    symbolFilter.trim() !== '' || exchangeFilter.length > 0 || productFilter.length > 0
+
+  const clearFilters = () => {
+    setSymbolFilter('')
+    setExchangeFilter([])
+    setProductFilter([])
+  }
+
+  const matchesFilters = useCallback(
+    (symbol: string, exchange: string, product: string | null) => {
+      if (symbolFilter.trim() && !symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase()))
+        return false
+      if (exchangeFilter.length > 0 && !exchangeFilter.includes(exchange)) return false
+      if (productFilter.length > 0 && !(product && productFilter.includes(product))) return false
+      return true
+    },
+    [symbolFilter, exchangeFilter, productFilter]
+  )
+
+  const filteredClosed = useMemo(
+    () => closedTrades.filter((t) => matchesFilters(t.symbol, t.exchange, t.product)),
+    [closedTrades, matchesFilters]
+  )
+  const filteredOpen = useMemo(
+    () => openPositions.filter((p) => matchesFilters(p.symbol, p.exchange, p.product)),
+    [openPositions, matchesFilters]
+  )
+
+  const totalRealized = filteredClosed.reduce((sum, t) => sum + t.realized_pnl, 0)
+  const totalUnrealized = filteredOpen.reduce((sum, p) => sum + (p.unrealized_pnl ?? 0), 0)
+  const unquotedCount = filteredOpen.filter((p) => p.unrealized_pnl == null).length
+
+  // Day-wise: realized by the day a lot closed. Unrealized exists only at
+  // the live LTP, so it lands on the most recent date (the end date) and
+  // every earlier row has none.
+  const dayRows: DayRow[] = useMemo(() => {
+    const byDate = new Map<string, number>()
+    for (const t of filteredClosed) {
+      const date = t.exit_timestamp.slice(0, 10)
+      byDate.set(date, (byDate.get(date) ?? 0) + t.realized_pnl)
+    }
+    const latestUnrealized = unrealizedAvailable ? totalUnrealized : null
+    if (showUnrealized && latestUnrealized !== null && !byDate.has(endDate)) {
+      byDate.set(endDate, 0)
+    }
+    const dates = Array.from(byDate.keys()).sort()
+    let running = 0
+    return dates.map((date) => {
+      const realized = byDate.get(date) ?? 0
+      const unrealized = showUnrealized && date === endDate ? latestUnrealized : null
+      running += (showRealized ? realized : 0) + (unrealized ?? 0)
+      return { date, realized, unrealized, cumulative: running }
+    })
+  }, [filteredClosed, unrealizedAvailable, totalUnrealized, showRealized, showUnrealized, endDate])
+
+  // In Unrealized mode only the live row is meaningful.
+  const visibleDayRows = showRealized ? dayRows : dayRows.filter((r) => r.unrealized !== null)
+
+  // Scrip-wise: every closed lot and open position merged by symbol,
+  // exchange and product, matching the Scrip-wise aggregation every broker's
+  // own P&L report uses. `entry_action` tells direction per lot - a BUY
   // entry closed by a sell is a long (buy value = entry leg, sell value =
   // exit leg); a SELL entry closed by a buy is a short (reversed).
   const scripRows: ScripRow[] = useMemo(() => {
     const rows = new Map<string, ScripRow>()
-    for (const trade of closedTrades) {
-      const key = `${trade.symbol}|${trade.exchange}|${trade.product ?? ''}`
-      const isLong = trade.entry_action === 'BUY'
-      const buyValue = trade.quantity * (isLong ? trade.entry_price : trade.exit_price)
-      const sellValue = trade.quantity * (isLong ? trade.exit_price : trade.entry_price)
-      const existing = rows.get(key)
-      if (existing) {
-        existing.quantity += trade.quantity
-        existing.buyValue += buyValue
-        existing.sellValue += sellValue
-        existing.realizedPnl += trade.realized_pnl
-        existing.tradeCount += 1
-      } else {
-        rows.set(key, {
-          symbol: trade.symbol,
-          exchange: trade.exchange,
-          product: trade.product,
-          quantity: trade.quantity,
-          buyValue,
-          sellValue,
-          realizedPnl: trade.realized_pnl,
-          tradeCount: 1,
-        })
+    const blank = (symbol: string, exchange: string, product: string | null): ScripRow => ({
+      key: scripKey(symbol, exchange, product),
+      symbol,
+      exchange,
+      product,
+      closedQuantity: 0,
+      buyValue: 0,
+      sellValue: 0,
+      realized: 0,
+      openQuantity: 0,
+      averagePrice: null,
+      ltp: null,
+      unrealized: null,
+      cumulative: 0,
+    })
+    if (showRealized) {
+      for (const t of filteredClosed) {
+        const key = scripKey(t.symbol, t.exchange, t.product)
+        const row = rows.get(key) ?? blank(t.symbol, t.exchange, t.product)
+        const isLong = t.entry_action === 'BUY'
+        row.closedQuantity += t.quantity
+        row.buyValue += t.quantity * (isLong ? t.entry_price : t.exit_price)
+        row.sellValue += t.quantity * (isLong ? t.exit_price : t.entry_price)
+        row.realized += t.realized_pnl
+        rows.set(key, row)
       }
     }
-    return Array.from(rows.values()).sort((a, b) => a.symbol.localeCompare(b.symbol))
-  }, [closedTrades])
+    if (showUnrealized) {
+      for (const p of filteredOpen) {
+        const key = scripKey(p.symbol, p.exchange, p.product)
+        const row = rows.get(key) ?? blank(p.symbol, p.exchange, p.product)
+        row.openQuantity += p.quantity
+        row.averagePrice = p.average_price
+        row.ltp = p.ltp
+        row.unrealized = p.unrealized_pnl
+        rows.set(key, row)
+      }
+    }
+    return Array.from(rows.values())
+      .map((row) => ({
+        ...row,
+        cumulative: (showRealized ? row.realized : 0) + (showUnrealized ? (row.unrealized ?? 0) : 0),
+      }))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol))
+  }, [filteredClosed, filteredOpen, showRealized, showUnrealized])
+
+  const heatmapDays: CalendarHeatmapDay[] = useMemo(
+    () =>
+      dayRows.map((row) => ({
+        date: row.date,
+        value: row.realized,
+        tooltip: `${row.date}: ${formatCurrency(row.realized)}`,
+      })),
+    [dayRows, formatCurrency]
+  )
+
+  const pnlClass = (value: number) => (value >= 0 ? 'text-green-600' : 'text-red-600')
+
+  const exportToCSV = () => {
+    const isDay = view === 'day'
+    const hasRows = isDay ? visibleDayRows.length > 0 : scripRows.length > 0
+    if (!hasRows) {
+      showToast.error('No data to export', 'system')
+      return
+    }
+    try {
+      let headers: string[]
+      let rows: (string | number)[][]
+      if (isDay) {
+        headers = [
+          'Date',
+          ...(showRealized ? ['Realized P&L'] : []),
+          ...(showUnrealized ? ['Unrealized P&L'] : []),
+          'Cumulative',
+        ]
+        rows = visibleDayRows.map((r) => [
+          r.date,
+          ...(showRealized ? [r.realized.toFixed(2)] : []),
+          ...(showUnrealized ? [r.unrealized == null ? '' : r.unrealized.toFixed(2)] : []),
+          r.cumulative.toFixed(2),
+        ])
+      } else {
+        headers = [
+          'Symbol',
+          'Exchange',
+          'Product',
+          ...(showRealized ? ['Closed Qty', 'Buy Value', 'Sell Value', 'Realized P&L'] : []),
+          ...(showUnrealized ? ['Open Qty', 'Avg Price', 'LTP', 'Unrealized P&L'] : []),
+          'Cumulative',
+        ]
+        rows = scripRows.map((r) => [
+          r.symbol,
+          r.exchange,
+          r.product ?? '',
+          ...(showRealized
+            ? [r.closedQuantity, r.buyValue.toFixed(2), r.sellValue.toFixed(2), r.realized.toFixed(2)]
+            : []),
+          ...(showUnrealized
+            ? [
+                r.openQuantity,
+                r.averagePrice == null ? '' : r.averagePrice.toFixed(2),
+                r.ltp == null ? '' : r.ltp.toFixed(2),
+                r.unrealized == null ? '' : r.unrealized.toFixed(2),
+              ]
+            : []),
+          r.cumulative.toFixed(2),
+        ])
+      }
+      const csv = [headers, ...rows.map((row) => row.map((c) => sanitizeCSV(c)))]
+        .map((row) => row.join(','))
+        .join('\n')
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const filename = `pnl_${isDay ? 'daywise' : 'scripwise'}_${startDate}_${endDate}.csv`
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast.success(`Downloaded ${filename}`, 'clipboard')
+    } catch {
+      showToast.error('Failed to export CSV', 'system')
+    }
+  }
+
+  const FilterChip = ({
+    options,
+    selected,
+    onToggle,
+  }: {
+    options: string[]
+    selected: string[]
+    onToggle: (value: string) => void
+  }) => (
+    <div className="flex flex-wrap gap-2">
+      {options.map((name) => (
+        <Button
+          key={name}
+          type="button"
+          size="sm"
+          variant={selected.includes(name) ? 'default' : 'outline'}
+          className={cn('rounded-full', selected.includes(name) && 'bg-pink-500 hover:bg-pink-600')}
+          onClick={() => onToggle(name)}
+        >
+          {name}
+        </Button>
+      ))}
+    </div>
+  )
 
   return (
     <div className="space-y-6">
@@ -215,90 +436,34 @@ export default function PnlHistory() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">P&L History</h1>
           <p className="text-muted-foreground">
-            Realized profit and loss across a date range, backfilled from your daily trade history
+            Realized and unrealized profit and loss across a date range, backfilled from your daily
+            trade history
           </p>
         </div>
       </div>
 
-      {/* Filters: Segment, Symbol, Strategy, Date range - same order as
-          Zerodha Console's own Tradebook/P&L report filters, Strategy
-          appended since it isn't part of that reference. */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-segment">Segment</Label>
-              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
-                <SelectTrigger id="pnl-segment">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="equity">Equity</SelectItem>
-                  <SelectItem value="fno">Futures & Options</SelectItem>
-                  <SelectItem value="currency">Currency</SelectItem>
-                  <SelectItem value="commodity">Commodity</SelectItem>
-                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-symbol">Symbol</Label>
-              <Input
-                id="pnl-symbol"
-                placeholder="e.g. INFY"
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-              />
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-strategy">Strategy</Label>
-              <Select value={strategy} onValueChange={setStrategy}>
-                <SelectTrigger id="pnl-strategy">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  {strategyOptions.map((name) => (
-                    <SelectItem key={name} value={name}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-start-date">Start date</Label>
-              <Input
-                id="pnl-start-date"
-                type="date"
-                value={startDate}
-                max={endDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value)
-                  setActiveDatePreset(null)
-                }}
-              />
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-end-date">End date</Label>
-              <Input
-                id="pnl-end-date"
-                type="date"
-                value={endDate}
-                min={startDate}
-                max={defaultEndDate()}
-                onChange={(e) => {
-                  setEndDate(e.target.value)
-                  setActiveDatePreset(null)
-                }}
-              />
-            </div>
-            <Button
-              onClick={() => fetchHistory()}
-              disabled={isLoading}
-              aria-label="Fetch P&L history"
-            >
+      {/* Fetch: date range, Segment and P&L type apply together on Fetch. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          {startDate} to {endDate}
+          {segment !== 'all' && ` | ${segment}`}
+          {` | ${PNL_MODE_LABEL[pnlMode]}`}
+        </p>
+        <Dialog
+          open={fetchOpen}
+          onOpenChange={(open) => {
+            if (open) {
+              setDSegment(segment)
+              setDStart(startDate)
+              setDEnd(endDate)
+              setDMode(pnlMode)
+              setActiveDatePreset(null)
+            }
+            setFetchOpen(open)
+          }}
+        >
+          <DialogTrigger asChild>
+            <Button disabled={isLoading} aria-label="Open fetch options">
               {isLoading ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
@@ -306,57 +471,160 @@ export default function PnlHistory() {
               )}
               Fetch
             </Button>
-          </div>
-          {/* Spacer matches the combined width of Segment+Symbol+Strategy
-              (3 flex-1 fields) so the chip row lands under Start/End date
-              (2 flex-1 fields) rather than the far left. */}
-          <div className="flex flex-col sm:flex-row gap-4 mt-4">
-            <div className="hidden sm:block flex-[3]" />
-            <div className="flex-[2]">
+          </DialogTrigger>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Fetch P&L</DialogTitle>
+              <DialogDescription>
+                Choose the date range and which P&L to show, then fetch.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="pnl-start-date">Start date</Label>
+                  <Input
+                    id="pnl-start-date"
+                    type="date"
+                    value={dStart}
+                    max={dEnd}
+                    onChange={(e) => {
+                      setDStart(e.target.value)
+                      setActiveDatePreset(null)
+                    }}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="pnl-end-date">End date</Label>
+                  <Input
+                    id="pnl-end-date"
+                    type="date"
+                    value={dEnd}
+                    min={dStart}
+                    max={defaultEndDate()}
+                    onChange={(e) => {
+                      setDEnd(e.target.value)
+                      setActiveDatePreset(null)
+                    }}
+                  />
+                </div>
+              </div>
               <DateRangePresets activeKey={activeDatePreset} onSelect={handleDatePresetSelect} />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="pnl-segment">Segment</Label>
+                  <Select value={dSegment} onValueChange={(v) => setDSegment(v as typeof dSegment)}>
+                    <SelectTrigger id="pnl-segment">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="equity">Equity</SelectItem>
+                      <SelectItem value="fno">Futures & Options</SelectItem>
+                      <SelectItem value="currency">Currency</SelectItem>
+                      <SelectItem value="commodity">Commodity</SelectItem>
+                      <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="pnl-mode">P&L</Label>
+                  <Select value={dMode} onValueChange={(v) => setDMode(v as PnlMode)}>
+                    <SelectTrigger id="pnl-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="combined">Combined</SelectItem>
+                      <SelectItem value="realized">Realized P&L</SelectItem>
+                      <SelectItem value="unrealized">Unrealized P&L</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Realized counts only booked positions. Unrealized counts only positions still open,
+                at the live price, so it is available only when the end date is today.
+              </p>
             </div>
-          </div>
-        </CardContent>
-      </Card>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setFetchOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={applyFetch}>Fetch</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
 
       {!hasFetched && !isLoading && (
         <div className="text-center py-16 text-muted-foreground">
           <p className="font-medium">Build a report</p>
-          <p className="text-sm">Pick a date range above and click Fetch</p>
+          <p className="text-sm">Click Fetch and pick a date range</p>
         </div>
       )}
 
       {hasFetched && (
         <>
           {/* Summary Cards */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardDescription>Total Realized P&L</CardDescription>
-                <CardTitle className={cn('text-2xl flex items-center gap-2', pnlColorClass)}>
-                  {totalRealizedPnl >= 0 ? (
-                    <TrendingUp className="h-5 w-5" />
+          <div className={cn('grid gap-4', showRealized && showUnrealized && 'md:grid-cols-2')}>
+            {showRealized && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Total Realized P&L</CardDescription>
+                  <CardTitle
+                    className={cn('text-2xl flex items-center gap-2', pnlClass(totalRealized))}
+                  >
+                    {totalRealized >= 0 ? (
+                      <TrendingUp className="h-5 w-5" />
+                    ) : (
+                      <TrendingDown className="h-5 w-5" />
+                    )}
+                    {formatCurrency(totalRealized)}
+                  </CardTitle>
+                </CardHeader>
+              </Card>
+            )}
+            {showUnrealized && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Total Unrealized P&L</CardDescription>
+                  {unrealizedAvailable ? (
+                    <>
+                      <CardTitle
+                        className={cn(
+                          'text-2xl flex items-center gap-2',
+                          pnlClass(totalUnrealized)
+                        )}
+                      >
+                        {totalUnrealized >= 0 ? (
+                          <TrendingUp className="h-5 w-5" />
+                        ) : (
+                          <TrendingDown className="h-5 w-5" />
+                        )}
+                        {formatCurrency(totalUnrealized)}
+                      </CardTitle>
+                      {unquotedCount > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          {unquotedCount} open position{unquotedCount === 1 ? '' : 's'} without a
+                          live price left out
+                        </p>
+                      )}
+                    </>
                   ) : (
-                    <TrendingDown className="h-5 w-5" />
+                    <CardTitle className="text-base font-normal text-muted-foreground">
+                      Not available - needs an end date of today and live prices
+                    </CardTitle>
                   )}
-                  {formatCurrency(totalRealizedPnl)}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardDescription>Closed Trades</CardDescription>
-                <CardTitle className="text-2xl">{tradeCount}</CardTitle>
-              </CardHeader>
-            </Card>
+                </CardHeader>
+              </Card>
+            )}
           </div>
 
           {/* Heat Map, matching Zerodha Console's own P&L report - a
               calendar grid colored green/red by that day's realized P&L,
-              shade intensity scaled to magnitude. Always visible (not part
-              of the Day-wise/Trade-wise toggle below), since it's a single
-              at-a-glance summary rather than a third detail view. */}
-          {heatmapDays.length > 0 && (
+              shade intensity scaled to magnitude. Hidden in Unrealized
+              mode, which has no per-day history. */}
+          {showRealized && heatmapDays.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle>Heat Map</CardTitle>
@@ -402,47 +670,141 @@ export default function PnlHistory() {
             </Card>
           )}
 
-          {/* Day-wise / Scrip-wise toggle, matching Zerodha Console's own
-              P&L report - only one breakdown is shown at a time. */}
-          <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}>
-            <TabsList>
-              <TabsTrigger value="day">Day-wise</TabsTrigger>
-              <TabsTrigger value="scrip">Scrip-wise</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          {/* Table toolbar: the Day-wise / Scrip-wise toggle on the left,
+              Filter and Export on the right. Both act on whichever table is
+              showing, so they sit directly above it. */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}>
+              <TabsList>
+                <TabsTrigger value="day">Day-wise</TabsTrigger>
+                <TabsTrigger value="scrip">Scrip-wise</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <div className="flex items-center gap-2">
+              <Dialog open={filterOpen} onOpenChange={setFilterOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    variant={hasActiveFilters ? 'default' : 'outline'}
+                    size="sm"
+                    className="relative"
+                    aria-label="Open table filters"
+                  >
+                    <Settings2 className="h-4 w-4 mr-2" />
+                    Filters
+                    {hasActiveFilters && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                    )}
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Table Filters</DialogTitle>
+                    <DialogDescription>
+                      Narrow the Day-wise and Scrip-wise tables by symbol, exchange or product
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-6 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="pnl-filter-symbol">Symbol</Label>
+                      <Input
+                        id="pnl-filter-symbol"
+                        placeholder="e.g. INFY"
+                        value={symbolFilter}
+                        onChange={(e) => setSymbolFilter(e.target.value)}
+                      />
+                    </div>
+                    {exchangeOptions.length > 0 && (
+                      <div className="space-y-2">
+                        <Label>Exchange</Label>
+                        <FilterChip
+                          options={exchangeOptions}
+                          selected={exchangeFilter}
+                          onToggle={(v) => setExchangeFilter((prev) => toggle(prev, v))}
+                        />
+                      </div>
+                    )}
+                    {productOptions.length > 0 && (
+                      <div className="space-y-2">
+                        <Label>Product</Label>
+                        <FilterChip
+                          options={productOptions}
+                          selected={productFilter}
+                          onToggle={(v) => setProductFilter((prev) => toggle(prev, v))}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <DialogFooter>
+                    <Button variant="ghost" onClick={clearFilters}>
+                      Clear All
+                    </Button>
+                    <Button onClick={() => setFilterOpen(false)}>Done</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportToCSV}
+                aria-label="Export the table to CSV"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export
+              </Button>
+            </div>
+          </div>
 
           {view === 'day' ? (
             <Card>
               <CardHeader>
                 <CardTitle>Daily Breakdown</CardTitle>
-                <CardDescription>Realized P&L by the day it was closed out</CardDescription>
+                <CardDescription>
+                  Realized P&L by the day it was closed out
+                  {showUnrealized && '; unrealized P&L on open positions appears on the latest day'}
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                {daily.length === 0 ? (
+                {visibleDayRows.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">
-                    No closed trades in this date range
+                    No matching trades in this date range
                   </p>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Date</TableHead>
-                        <TableHead className="text-right">Trades</TableHead>
-                        <TableHead className="text-right">Realized P&L</TableHead>
+                        {showRealized && <TableHead className="text-right">Realized P&L</TableHead>}
+                        {showUnrealized && (
+                          <TableHead className="text-right">Unrealized P&L</TableHead>
+                        )}
+                        <TableHead className="text-right">Cumulative</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {daily.map((row) => (
+                      {visibleDayRows.map((row) => (
                         <TableRow key={row.date}>
                           <TableCell>{row.date}</TableCell>
-                          <TableCell className="text-right">{row.trade_count}</TableCell>
+                          {showRealized && (
+                            <TableCell className={cn('text-right font-medium', pnlClass(row.realized))}>
+                              {formatCurrency(row.realized)}
+                            </TableCell>
+                          )}
+                          {showUnrealized && (
+                            <TableCell
+                              className={cn(
+                                'text-right font-medium',
+                                row.unrealized == null
+                                  ? 'text-muted-foreground'
+                                  : pnlClass(row.unrealized)
+                              )}
+                            >
+                              {row.unrealized == null ? '-' : formatCurrency(row.unrealized)}
+                            </TableCell>
+                          )}
                           <TableCell
-                            className={cn(
-                              'text-right font-medium',
-                              row.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'
-                            )}
+                            className={cn('text-right font-medium', pnlClass(row.cumulative))}
                           >
-                            {formatCurrency(row.realized_pnl)}
+                            {formatCurrency(row.cumulative)}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -456,14 +818,14 @@ export default function PnlHistory() {
               <CardHeader>
                 <CardTitle>Scrip-wise</CardTitle>
                 <CardDescription>
-                  Every closed lot merged by symbol, matching the Scrip-wise P&L report every broker
-                  uses
+                  Every closed lot and open position merged by symbol, matching the Scrip-wise P&L
+                  report every broker uses. Cumulative is the scrip's total over the selected P&L.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 {scripRows.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">
-                    No closed trades in this date range
+                    No matching trades in this date range
                   </p>
                 ) : (
                   <div className="overflow-x-auto">
@@ -473,34 +835,79 @@ export default function PnlHistory() {
                           <TableHead>Symbol</TableHead>
                           <TableHead>Exchange</TableHead>
                           <TableHead>Product</TableHead>
-                          <TableHead className="text-right">Qty</TableHead>
-                          <TableHead className="text-right">Buy Value</TableHead>
-                          <TableHead className="text-right">Sell Value</TableHead>
-                          <TableHead className="text-right">Trades</TableHead>
-                          <TableHead className="text-right">Realized P&L</TableHead>
+                          {showRealized && (
+                            <>
+                              <TableHead className="text-right">Qty</TableHead>
+                              <TableHead className="text-right">Buy Value</TableHead>
+                              <TableHead className="text-right">Sell Value</TableHead>
+                              <TableHead className="text-right">Realized P&L</TableHead>
+                            </>
+                          )}
+                          {showUnrealized && (
+                            <>
+                              <TableHead className="text-right">Open Qty</TableHead>
+                              <TableHead className="text-right">Avg Price</TableHead>
+                              <TableHead className="text-right">LTP</TableHead>
+                              <TableHead className="text-right">Unrealized P&L</TableHead>
+                            </>
+                          )}
+                          <TableHead className="text-right">Cumulative</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {scripRows.map((row) => (
-                          <TableRow key={`${row.symbol}-${row.exchange}-${row.product}`}>
+                          <TableRow key={row.key}>
                             <TableCell>{row.symbol}</TableCell>
                             <TableCell>{row.exchange}</TableCell>
                             <TableCell>{row.product ?? '-'}</TableCell>
-                            <TableCell className="text-right">{row.quantity}</TableCell>
-                            <TableCell className="text-right">
-                              {formatCurrency(row.buyValue)}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {formatCurrency(row.sellValue)}
-                            </TableCell>
-                            <TableCell className="text-right">{row.tradeCount}</TableCell>
+                            {showRealized && (
+                              <>
+                                <TableCell className="text-right">
+                                  {row.closedQuantity || '-'}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {row.closedQuantity ? formatCurrency(row.buyValue) : '-'}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {row.closedQuantity ? formatCurrency(row.sellValue) : '-'}
+                                </TableCell>
+                                <TableCell
+                                  className={cn(
+                                    'text-right font-medium',
+                                    row.closedQuantity ? pnlClass(row.realized) : 'text-muted-foreground'
+                                  )}
+                                >
+                                  {row.closedQuantity ? formatCurrency(row.realized) : '-'}
+                                </TableCell>
+                              </>
+                            )}
+                            {showUnrealized && (
+                              <>
+                                <TableCell className="text-right">
+                                  {row.openQuantity || '-'}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {row.averagePrice == null ? '-' : formatCurrency(row.averagePrice)}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  {row.ltp == null ? '-' : formatCurrency(row.ltp)}
+                                </TableCell>
+                                <TableCell
+                                  className={cn(
+                                    'text-right font-medium',
+                                    row.unrealized == null
+                                      ? 'text-muted-foreground'
+                                      : pnlClass(row.unrealized)
+                                  )}
+                                >
+                                  {row.unrealized == null ? '-' : formatCurrency(row.unrealized)}
+                                </TableCell>
+                              </>
+                            )}
                             <TableCell
-                              className={cn(
-                                'text-right font-medium',
-                                row.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'
-                              )}
+                              className={cn('text-right font-medium', pnlClass(row.cumulative))}
                             >
-                              {formatCurrency(row.realizedPnl)}
+                              {formatCurrency(row.cumulative)}
                             </TableCell>
                           </TableRow>
                         ))}

@@ -61,6 +61,10 @@ export interface PnlHistoryOpenPosition {
   action: string
   quantity: number
   average_price: number
+  // Live price and P&L on the open quantity; null when the range ends
+  // before today or the position has no live quote (expired contract).
+  ltp: number | null
+  unrealized_pnl: number | null
 }
 
 export interface PnlHistoryData {
@@ -71,6 +75,7 @@ export interface PnlHistoryData {
   daily: PnlHistoryDailyRow[]
   closed_trades: PnlHistoryClosedTrade[]
   open_positions: PnlHistoryOpenPosition[]
+  total_unrealized_pnl: number | null
 }
 
 /**

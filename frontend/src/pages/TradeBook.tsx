@@ -222,7 +222,8 @@ export default function TradeBook() {
   // exchange). Options come from the account's own strategy book
   // (database/strategy_book_db.py, SKYSHIELD_PATCHES.md), same source and
   // pattern as PnlHistory.tsx's Strategy filter.
-  const [strategyFilter, setStrategyFilter] = useState<'all' | string>('all')
+  // Multi-select: empty array means every strategy.
+  const [strategyFilters, setStrategyFilters] = useState<string[]>([])
   const [strategyOptions, setStrategyOptions] = useState<string[]>([])
   // Manual strategy-tag fallback (SKYSHIELD_PATCHES.md) - which historical
   // row, if any, currently has its inline editor open.
@@ -232,6 +233,16 @@ export default function TradeBook() {
   const [startDate, setStartDate] = useState(sevenDaysAgoStr())
   const [endDate, setEndDate] = useState(todayStr())
   const isHistorical = startDate !== todayStr() || endDate !== todayStr()
+
+  // Fetch dialog drafts. Segment, Symbol, Strategy and the date range above are
+  // the applied values; the dialog edits copies and applies them together on
+  // Fetch, so nothing changes the table until the user clicks Fetch.
+  const [fetchOpen, setFetchOpen] = useState(false)
+  const [dSegment, setDSegment] = useState<'all' | Segment>('all')
+  const [dSymbol, setDSymbol] = useState('')
+  const [dStrategies, setDStrategies] = useState<string[]>([])
+  const [dStart, setDStart] = useState(startDate)
+  const [dEnd, setDEnd] = useState(endDate)
 
   // Sort state - Default: most recent first
   const [sortConfig, setSortConfig] = useState<SortConfig>({
@@ -247,7 +258,11 @@ export default function TradeBook() {
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
       if (segment !== 'all' && segmentOf(trade) !== segment) return false
-      if (strategyFilter !== 'all' && trade.strategy !== strategyFilter) return false
+      if (
+        strategyFilters.length > 0 &&
+        !(trade.strategy && strategyFilters.includes(trade.strategy))
+      )
+        return false
       if (symbolFilter && !trade.symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase()))
         return false
       return true
@@ -269,7 +284,7 @@ export default function TradeBook() {
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
       return 0
     })
-  }, [trades, filters, segment, strategyFilter, symbolFilter, sortConfig])
+  }, [trades, filters, segment, strategyFilters, symbolFilter, sortConfig])
 
   // Heat map data, grouping the already-filtered trades by day. Scoped to
   // whatever Segment/Symbol/date range is currently applied, same as
@@ -314,8 +329,8 @@ export default function TradeBook() {
     setFilters({ action: [], exchange: [], product: [] })
   }
 
-  const fetchTrades = useCallback(
-    async (showRefresh = false) => {
+  const loadTrades = useCallback(
+    async (start: string, end: string, showRefresh = false) => {
       if (!apiKey) {
         setIsLoading(false)
         return
@@ -326,10 +341,11 @@ export default function TradeBook() {
       try {
         // A date range other than "today" switches to the ledger-backed
         // historical endpoint - see the isHistorical comment above. Segment/
-        // Symbol stay client-side filters applied uniformly to either
+        // Symbol/Strategy stay client-side filters applied uniformly to either
         // source in sortedAndFilteredTrades, rather than branching here too.
-        const response = isHistorical
-          ? await tradingApi.getPnlTrades(apiKey, startDate, endDate)
+        const historical = start !== todayStr() || end !== todayStr()
+        const response = historical
+          ? await tradingApi.getPnlTrades(apiKey, start, end)
           : await tradingApi.getTrades(apiKey)
         if (response.status === 'success' && response.data) {
           setTrades(response.data)
@@ -344,8 +360,25 @@ export default function TradeBook() {
         setIsRefreshing(false)
       }
     },
-    [apiKey, isHistorical, startDate, endDate]
+    [apiKey]
   )
+
+  // Reload with the currently applied range (order events, mode changes).
+  const fetchTrades = useCallback(
+    () => loadTrades(startDate, endDate),
+    [loadTrades, startDate, endDate]
+  )
+
+  // Apply the dialog's drafts together, then load.
+  const applyFetch = () => {
+    setSegment(dSegment)
+    setSymbolFilter(dSymbol)
+    setStrategyFilters(dStrategies)
+    setStartDate(dStart)
+    setEndDate(dEnd)
+    setFetchOpen(false)
+    loadTrades(dStart, dEnd, true)
+  }
 
   // Runs once on mount (and again if apiKey only becomes available after
   // mount) - deliberately not depending on fetchTrades itself, which also
@@ -542,12 +575,6 @@ export default function TradeBook() {
     }
   }
 
-  const stats = {
-    total: sortedAndFilteredTrades.length,
-    buyTrades: sortedAndFilteredTrades.filter((t) => t.action === 'BUY').length,
-    sellTrades: sortedAndFilteredTrades.filter((t) => t.action === 'SELL').length,
-  }
-
   const FilterChip = ({
     type,
     value,
@@ -583,99 +610,6 @@ export default function TradeBook() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Settings Button */}
-          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant={hasActiveFilters ? 'default' : 'outline'}
-                size="sm"
-                className="relative"
-                aria-label="Open trade filters"
-              >
-                <Settings2 className="h-4 w-4 mr-2" />
-                Filters
-                {hasActiveFilters && (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
-                )}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>Trade Filters</DialogTitle>
-                <DialogDescription>Filter trades by action, exchange, or product</DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-6 py-4">
-                {/* Action */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Action
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="action" value="BUY" label="Buy" />
-                    <FilterChip type="action" value="SELL" label="Sell" />
-                  </div>
-                </div>
-
-                {/* Exchange */}
-                <div className="space-y-3">
-                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Exchange
-                  </Label>
-                  <div className="flex flex-wrap gap-2">
-                    <FilterChip type="exchange" value="NSE" label="NSE" />
-                    <FilterChip type="exchange" value="BSE" label="BSE" />
-                    <FilterChip type="exchange" value="NFO" label="NFO" />
-                    <FilterChip type="exchange" value="BFO" label="BFO" />
-                    <FilterChip type="exchange" value="MCX" label="MCX" />
-                    <FilterChip type="exchange" value="CDS" label="CDS" />
-                  </div>
-                </div>
-
-                {/* Product */}
-                {!isCrypto && (
-                  <div className="space-y-3">
-                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Product
-                    </Label>
-                    <div className="flex flex-wrap gap-2">
-                      <FilterChip type="product" value="CNC" label="CNC" />
-                      <FilterChip type="product" value="MIS" label="MIS" />
-                      <FilterChip type="product" value="NRML" label="NRML" />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <DialogFooter>
-                <Button variant="ghost" onClick={clearFilters}>
-                  Clear All
-                </Button>
-                <Button onClick={() => setSettingsOpen(false)}>Done</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchTrades(true)}
-            disabled={isRefreshing}
-            aria-label="Refresh tradebook"
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
-            Refresh
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={exportToCSV}
-            aria-label="Export tradebook to CSV"
-          >
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
-
           {/* P&L history CSV import (fork-only) */}
           <Dialog
             open={importDialogOpen}
@@ -770,81 +704,32 @@ export default function TradeBook() {
         </div>
       </div>
 
-      {/* Segment / Symbol / Date range (fork-only - SKYSHIELD_PATCHES.md).
-          Same layout as PnlHistory.tsx's filter row, and the same reference
-          this whole historical view was modeled on (Zerodha Console's own
-          Tradebook report). Leaving the date range at today keeps this page
-          on the existing live broker view untouched - see isHistorical. */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="tb-segment">Segment</Label>
-              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
-                <SelectTrigger id="tb-segment">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="equity">Equity</SelectItem>
-                  <SelectItem value="fno">Futures & Options</SelectItem>
-                  <SelectItem value="currency">Currency</SelectItem>
-                  <SelectItem value="commodity">Commodity</SelectItem>
-                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="tb-symbol">Symbol</Label>
-              <Input
-                id="tb-symbol"
-                placeholder="e.g. INFY"
-                value={symbolFilter}
-                onChange={(e) => setSymbolFilter(e.target.value)}
-              />
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="tb-strategy">Strategy</Label>
-              <Select value={strategyFilter} onValueChange={setStrategyFilter}>
-                <SelectTrigger id="tb-strategy">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  {strategyOptions.map((name) => (
-                    <SelectItem key={name} value={name}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="tb-start-date">Start date</Label>
-              <Input
-                id="tb-start-date"
-                type="date"
-                value={startDate}
-                max={endDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="tb-end-date">End date</Label>
-              <Input
-                id="tb-end-date"
-                type="date"
-                value={endDate}
-                min={startDate}
-                max={todayStr()}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
-            </div>
-            <Button
-              onClick={() => fetchTrades(true)}
-              disabled={isRefreshing}
-              aria-label="Fetch trades for the selected filters"
-            >
+      {/* Fetch (fork-only - SKYSHIELD_PATCHES.md). Date range, Segment, Symbol
+          and Strategy live in one dialog and apply together on Fetch. Leaving
+          the date range at today keeps this page on the existing live broker
+          view untouched - see isHistorical. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          {isHistorical ? `${startDate} to ${endDate}` : 'Today'}
+          {segment !== 'all' && ` | ${segment}`}
+          {symbolFilter && ` | ${symbolFilter.trim().toUpperCase()}`}
+          {strategyFilters.length > 0 && ` | ${strategyFilters.join(', ')}`}
+        </p>
+        <Dialog
+          open={fetchOpen}
+          onOpenChange={(open) => {
+            if (open) {
+              setDSegment(segment)
+              setDSymbol(symbolFilter)
+              setDStrategies(strategyFilters)
+              setDStart(startDate)
+              setDEnd(endDate)
+            }
+            setFetchOpen(open)
+          }}
+        >
+          <DialogTrigger asChild>
+            <Button disabled={isRefreshing} aria-label="Open fetch options">
               {isRefreshing ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
@@ -852,80 +737,104 @@ export default function TradeBook() {
               )}
               Fetch
             </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Active Filters Bar */}
-      {hasActiveFilters && (
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm text-muted-foreground">Active Filters:</span>
-          {filters.action.map((v) => (
-            <Badge
-              key={v}
-              variant="secondary"
-              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
-            >
-              {v}
-            </Badge>
-          ))}
-          {filters.exchange.map((v) => (
-            <Badge
-              key={v}
-              variant="secondary"
-              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
-            >
-              {v}
-            </Badge>
-          ))}
-          {!isCrypto &&
-            filters.product.map((v) => (
-              <Badge
-                key={v}
-                variant="secondary"
-                className="bg-pink-500/10 text-pink-600 border-pink-500/30"
-              >
-                {v}
-              </Badge>
-            ))}
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-red-500 border-red-500/50 hover:bg-red-500/10"
-            onClick={clearFilters}
-            aria-label="Clear active filters"
-          >
-            Clear All
-          </Button>
-        </div>
-      )}
-
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Total Trades</CardDescription>
-            <CardTitle className="text-2xl">{stats.total}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Buy Trades</CardDescription>
-            <CardTitle className="text-2xl text-green-600 flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              {stats.buyTrades}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Sell Trades</CardDescription>
-            <CardTitle className="text-2xl text-red-600 flex items-center gap-2">
-              <TrendingDown className="h-5 w-5" />
-              {stats.sellTrades}
-            </CardTitle>
-          </CardHeader>
-        </Card>
+          </DialogTrigger>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Fetch Trades</DialogTitle>
+              <DialogDescription>
+                Choose the date range and what to include, then fetch.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="tb-start-date">Start date</Label>
+                  <Input
+                    id="tb-start-date"
+                    type="date"
+                    value={dStart}
+                    max={dEnd}
+                    onChange={(e) => setDStart(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="tb-end-date">End date</Label>
+                  <Input
+                    id="tb-end-date"
+                    type="date"
+                    value={dEnd}
+                    min={dStart}
+                    max={todayStr()}
+                    onChange={(e) => setDEnd(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="tb-segment">Segment</Label>
+                  <Select value={dSegment} onValueChange={(v) => setDSegment(v as typeof dSegment)}>
+                    <SelectTrigger id="tb-segment">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="equity">Equity</SelectItem>
+                      <SelectItem value="fno">Futures & Options</SelectItem>
+                      <SelectItem value="currency">Currency</SelectItem>
+                      <SelectItem value="commodity">Commodity</SelectItem>
+                      <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="tb-symbol">Symbol</Label>
+                  <Input
+                    id="tb-symbol"
+                    placeholder="e.g. INFY"
+                    value={dSymbol}
+                    onChange={(e) => setDSymbol(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Strategy</Label>
+                <div className="flex flex-wrap gap-2">
+                  {strategyOptions.length === 0 && (
+                    <span className="text-sm text-muted-foreground">No strategies tracked</span>
+                  )}
+                  {strategyOptions.map((name) => {
+                    const selected = dStrategies.includes(name)
+                    return (
+                      <Button
+                        key={name}
+                        type="button"
+                        size="sm"
+                        variant={selected ? 'default' : 'outline'}
+                        className={cn('rounded-full', selected && 'bg-pink-500 hover:bg-pink-600')}
+                        onClick={() =>
+                          setDStrategies((prev) =>
+                            selected ? prev.filter((n) => n !== name) : [...prev, name]
+                          )
+                        }
+                      >
+                        {name}
+                      </Button>
+                    )
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  None selected means all strategies. Live (today-only) rows carry no strategy.
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setFetchOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={applyFetch}>Fetch</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Heat Map, matching Zerodha Console's own Tradebook heat map - a
@@ -970,6 +879,141 @@ export default function TradeBook() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Table toolbar: Filters and Export act on the fetched rows below only,
+          so they sit directly above the table, top right. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          {sortedAndFilteredTrades.length} trade{sortedAndFilteredTrades.length === 1 ? '' : 's'}
+        </p>
+        <div className="flex items-center gap-2">
+          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant={hasActiveFilters ? 'default' : 'outline'}
+                size="sm"
+                className="relative"
+                aria-label="Open trade filters"
+              >
+                <Settings2 className="h-4 w-4 mr-2" />
+                Filters
+                {hasActiveFilters && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                )}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Trade Filters</DialogTitle>
+                <DialogDescription>Filter trades by action, exchange, or product</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-6 py-4">
+                {/* Action */}
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Action
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    <FilterChip type="action" value="BUY" label="Buy" />
+                    <FilterChip type="action" value="SELL" label="Sell" />
+                  </div>
+                </div>
+
+                {/* Exchange */}
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Exchange
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    <FilterChip type="exchange" value="NSE" label="NSE" />
+                    <FilterChip type="exchange" value="BSE" label="BSE" />
+                    <FilterChip type="exchange" value="NFO" label="NFO" />
+                    <FilterChip type="exchange" value="BFO" label="BFO" />
+                    <FilterChip type="exchange" value="MCX" label="MCX" />
+                    <FilterChip type="exchange" value="CDS" label="CDS" />
+                  </div>
+                </div>
+
+                {/* Product */}
+                {!isCrypto && (
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Product
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      <FilterChip type="product" value="CNC" label="CNC" />
+                      <FilterChip type="product" value="MIS" label="MIS" />
+                      <FilterChip type="product" value="NRML" label="NRML" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button variant="ghost" onClick={clearFilters}>
+                  Clear All
+                </Button>
+                <Button onClick={() => setSettingsOpen(false)}>Done</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportToCSV}
+            aria-label="Export tradebook to CSV"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Export
+          </Button>
+        </div>
+      </div>
+
+      {/* Active Filters Bar */}
+      {hasActiveFilters && (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm text-muted-foreground">Active Filters:</span>
+          {filters.action.map((v) => (
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
+              {v}
+            </Badge>
+          ))}
+          {filters.exchange.map((v) => (
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
+              {v}
+            </Badge>
+          ))}
+          {!isCrypto &&
+            filters.product.map((v) => (
+              <Badge
+                key={v}
+                variant="secondary"
+                className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+              >
+                {v}
+              </Badge>
+            ))}
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-red-500 border-red-500/50 hover:bg-red-500/10"
+            onClick={clearFilters}
+            aria-label="Clear active filters"
+          >
+            Clear All
+          </Button>
+        </div>
       )}
 
       {/* Trades Table */}
