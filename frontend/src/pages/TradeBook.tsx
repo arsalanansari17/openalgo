@@ -89,14 +89,16 @@ function segmentOf(trade: Trade): Segment | undefined {
   return (trade.segment as Segment | undefined) ?? EXCHANGE_SEGMENT_MAP[trade.exchange]
 }
 
+// Local calendar date (en-CA formats YYYY-MM-DD). toISOString() would be the
+// UTC date, which is still yesterday before 05:30 IST.
 function todayStr(): string {
-  return new Date().toISOString().split('T')[0]
+  return new Date().toLocaleDateString('en-CA')
 }
 
 function sevenDaysAgoStr(): string {
   const d = new Date()
   d.setDate(d.getDate() - 7)
-  return d.toISOString().split('T')[0]
+  return d.toLocaleDateString('en-CA')
 }
 
 /**
@@ -234,16 +236,6 @@ export default function TradeBook() {
   const [endDate, setEndDate] = useState(todayStr())
   const isHistorical = startDate !== todayStr() || endDate !== todayStr()
 
-  // Fetch dialog drafts. Segment, Symbol, Strategy and the date range above are
-  // the applied values; the dialog edits copies and applies them together on
-  // Fetch, so nothing changes the table until the user clicks Fetch.
-  const [fetchOpen, setFetchOpen] = useState(false)
-  const [dSegment, setDSegment] = useState<'all' | Segment>('all')
-  const [dSymbol, setDSymbol] = useState('')
-  const [dStrategies, setDStrategies] = useState<string[]>([])
-  const [dStart, setDStart] = useState(startDate)
-  const [dEnd, setDEnd] = useState(endDate)
-
   // Sort state - Default: most recent first
   const [sortConfig, setSortConfig] = useState<SortConfig>({
     key: 'timestamp',
@@ -312,7 +304,11 @@ export default function TradeBook() {
   }
 
   const hasActiveFilters =
-    filters.action.length > 0 || filters.exchange.length > 0 || filters.product.length > 0
+    filters.action.length > 0 ||
+    filters.exchange.length > 0 ||
+    filters.product.length > 0 ||
+    symbolFilter.trim() !== '' ||
+    strategyFilters.length > 0
 
   const toggleFilter = (type: keyof FilterState, value: string) => {
     setFilters((prev) => {
@@ -327,10 +323,12 @@ export default function TradeBook() {
 
   const clearFilters = () => {
     setFilters({ action: [], exchange: [], product: [] })
+    setSymbolFilter('')
+    setStrategyFilters([])
   }
 
-  const loadTrades = useCallback(
-    async (start: string, end: string, showRefresh = false) => {
+  const fetchTrades = useCallback(
+    async (showRefresh = false) => {
       if (!apiKey) {
         setIsLoading(false)
         return
@@ -343,9 +341,8 @@ export default function TradeBook() {
         // historical endpoint - see the isHistorical comment above. Segment/
         // Symbol/Strategy stay client-side filters applied uniformly to either
         // source in sortedAndFilteredTrades, rather than branching here too.
-        const historical = start !== todayStr() || end !== todayStr()
-        const response = historical
-          ? await tradingApi.getPnlTrades(apiKey, start, end)
+        const response = isHistorical
+          ? await tradingApi.getPnlTrades(apiKey, startDate, endDate)
           : await tradingApi.getTrades(apiKey)
         if (response.status === 'success' && response.data) {
           setTrades(response.data)
@@ -360,25 +357,8 @@ export default function TradeBook() {
         setIsRefreshing(false)
       }
     },
-    [apiKey]
+    [apiKey, isHistorical, startDate, endDate]
   )
-
-  // Reload with the currently applied range (order events, mode changes).
-  const fetchTrades = useCallback(
-    () => loadTrades(startDate, endDate),
-    [loadTrades, startDate, endDate]
-  )
-
-  // Apply the dialog's drafts together, then load.
-  const applyFetch = () => {
-    setSegment(dSegment)
-    setSymbolFilter(dSymbol)
-    setStrategyFilters(dStrategies)
-    setStartDate(dStart)
-    setEndDate(dEnd)
-    setFetchOpen(false)
-    loadTrades(dStart, dEnd, true)
-  }
 
   // Runs once on mount (and again if apiKey only becomes available after
   // mount) - deliberately not depending on fetchTrades itself, which also
@@ -704,32 +684,56 @@ export default function TradeBook() {
         </div>
       </div>
 
-      {/* Fetch (fork-only - SKYSHIELD_PATCHES.md). Date range, Segment, Symbol
-          and Strategy live in one dialog and apply together on Fetch. Leaving
-          the date range at today keeps this page on the existing live broker
-          view untouched - see isHistorical. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          {isHistorical ? `${startDate} to ${endDate}` : 'Today'}
-          {segment !== 'all' && ` | ${segment}`}
-          {symbolFilter && ` | ${symbolFilter.trim().toUpperCase()}`}
-          {strategyFilters.length > 0 && ` | ${strategyFilters.join(', ')}`}
-        </p>
-        <Dialog
-          open={fetchOpen}
-          onOpenChange={(open) => {
-            if (open) {
-              setDSegment(segment)
-              setDSymbol(symbolFilter)
-              setDStrategies(strategyFilters)
-              setDStart(startDate)
-              setDEnd(endDate)
-            }
-            setFetchOpen(open)
-          }}
-        >
-          <DialogTrigger asChild>
-            <Button disabled={isRefreshing} aria-label="Open fetch options">
+      {/* Segment / Date range (fork-only - SKYSHIELD_PATCHES.md). Same layout
+          as PnlHistory.tsx's fetch row. Symbol and Strategy live in the Filters
+          popup above the table, since they only narrow the rows already
+          fetched. Leaving the date range at today keeps this page on the
+          existing live broker view untouched - see isHistorical. */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-segment">Segment</Label>
+              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
+                <SelectTrigger id="tb-segment">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="equity">Equity</SelectItem>
+                  <SelectItem value="fno">Futures & Options</SelectItem>
+                  <SelectItem value="currency">Currency</SelectItem>
+                  <SelectItem value="commodity">Commodity</SelectItem>
+                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-start-date">Start date</Label>
+              <Input
+                id="tb-start-date"
+                type="date"
+                value={startDate}
+                max={endDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-end-date">End date</Label>
+              <Input
+                id="tb-end-date"
+                type="date"
+                value={endDate}
+                min={startDate}
+                max={todayStr()}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+            <Button
+              onClick={() => fetchTrades(true)}
+              disabled={isRefreshing}
+              aria-label="Fetch trades for the selected filters"
+            >
               {isRefreshing ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
@@ -737,105 +741,9 @@ export default function TradeBook() {
               )}
               Fetch
             </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Fetch Trades</DialogTitle>
-              <DialogDescription>
-                Choose the date range and what to include, then fetch.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-2">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <Label htmlFor="tb-start-date">Start date</Label>
-                  <Input
-                    id="tb-start-date"
-                    type="date"
-                    value={dStart}
-                    max={dEnd}
-                    onChange={(e) => setDStart(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="tb-end-date">End date</Label>
-                  <Input
-                    id="tb-end-date"
-                    type="date"
-                    value={dEnd}
-                    min={dStart}
-                    max={todayStr()}
-                    onChange={(e) => setDEnd(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <Label htmlFor="tb-segment">Segment</Label>
-                  <Select value={dSegment} onValueChange={(v) => setDSegment(v as typeof dSegment)}>
-                    <SelectTrigger id="tb-segment">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="equity">Equity</SelectItem>
-                      <SelectItem value="fno">Futures & Options</SelectItem>
-                      <SelectItem value="currency">Currency</SelectItem>
-                      <SelectItem value="commodity">Commodity</SelectItem>
-                      <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="tb-symbol">Symbol</Label>
-                  <Input
-                    id="tb-symbol"
-                    placeholder="e.g. INFY"
-                    value={dSymbol}
-                    onChange={(e) => setDSymbol(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Strategy</Label>
-                <div className="flex flex-wrap gap-2">
-                  {strategyOptions.length === 0 && (
-                    <span className="text-sm text-muted-foreground">No strategies tracked</span>
-                  )}
-                  {strategyOptions.map((name) => {
-                    const selected = dStrategies.includes(name)
-                    return (
-                      <Button
-                        key={name}
-                        type="button"
-                        size="sm"
-                        variant={selected ? 'default' : 'outline'}
-                        className={cn('rounded-full', selected && 'bg-pink-500 hover:bg-pink-600')}
-                        onClick={() =>
-                          setDStrategies((prev) =>
-                            selected ? prev.filter((n) => n !== name) : [...prev, name]
-                          )
-                        }
-                      >
-                        {name}
-                      </Button>
-                    )
-                  })}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  None selected means all strategies. Live (today-only) rows carry no strategy.
-                </p>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="ghost" onClick={() => setFetchOpen(false)}>
-                Cancel
-              </Button>
-              <Button onClick={applyFetch}>Fetch</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Heat Map, matching Zerodha Console's own Tradebook heat map - a
           calendar grid colored blue by that day's trade count, shade
@@ -906,7 +814,9 @@ export default function TradeBook() {
             <DialogContent className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Trade Filters</DialogTitle>
-                <DialogDescription>Filter trades by action, exchange, or product</DialogDescription>
+                <DialogDescription>
+                  Filter trades by action, exchange, product, symbol or strategy
+                </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-6 py-4">
@@ -949,6 +859,59 @@ export default function TradeBook() {
                     </div>
                   </div>
                 )}
+
+                {/* Symbol */}
+                <div className="space-y-3">
+                  <Label
+                    htmlFor="tb-filter-symbol"
+                    className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                  >
+                    Symbol
+                  </Label>
+                  <Input
+                    id="tb-filter-symbol"
+                    placeholder="e.g. INFY"
+                    value={symbolFilter}
+                    onChange={(e) => setSymbolFilter(e.target.value)}
+                  />
+                </div>
+
+                {/* Strategy (multi-select; none selected means all) */}
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Strategy
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {strategyOptions.length === 0 && (
+                      <span className="text-sm text-muted-foreground">No strategies tracked</span>
+                    )}
+                    {strategyOptions.map((name) => {
+                      const selected = strategyFilters.includes(name)
+                      return (
+                        <Button
+                          key={name}
+                          type="button"
+                          size="sm"
+                          variant={selected ? 'default' : 'outline'}
+                          className={cn(
+                            'rounded-full',
+                            selected && 'bg-pink-500 hover:bg-pink-600'
+                          )}
+                          onClick={() =>
+                            setStrategyFilters((prev) =>
+                              selected ? prev.filter((n) => n !== name) : [...prev, name]
+                            )
+                          }
+                        >
+                          {name}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Live (today-only) rows carry no strategy.
+                  </p>
+                </div>
               </div>
 
               <DialogFooter>
@@ -986,6 +949,23 @@ export default function TradeBook() {
             </Badge>
           ))}
           {filters.exchange.map((v) => (
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
+              {v}
+            </Badge>
+          ))}
+          {symbolFilter.trim() !== '' && (
+            <Badge
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
+              {symbolFilter.trim().toUpperCase()}
+            </Badge>
+          )}
+          {strategyFilters.map((v) => (
             <Badge
               key={v}
               variant="secondary"

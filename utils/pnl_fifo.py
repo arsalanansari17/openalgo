@@ -37,6 +37,8 @@ class RealizedLot:
     exit_price: float
     exit_timestamp: object
     realized_pnl: float
+    # Strategy tag of the entry fill (None when untagged) - the position's identity.
+    strategy: str | None = None
 
 
 @dataclass
@@ -51,6 +53,7 @@ class OpenPosition:
     action: str  # BUY (net long) or SELL (net short)
     quantity: float
     average_price: float
+    strategy: str | None = None
 
 
 @dataclass
@@ -130,6 +133,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
             ts = trade.get("trade_timestamp")
             fill_exchange = trade.get("exchange")
             fill_product = trade.get("product")
+            fill_strategy = trade.get("strategy")
 
             if qty <= 0:
                 continue
@@ -154,6 +158,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                             exit_price=price,
                             exit_timestamp=ts,
                             realized_pnl=realized_pnl,
+                            strategy=open_fill.get("strategy"),
                         )
                     )
                     open_fill["quantity"] -= matched
@@ -168,6 +173,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                             "timestamp": ts,
                             "exchange": fill_exchange,
                             "product": fill_product,
+                            "strategy": fill_strategy,
                         }
                     )
 
@@ -189,6 +195,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                             exit_price=price,
                             exit_timestamp=ts,
                             realized_pnl=realized_pnl,
+                            strategy=open_fill.get("strategy"),
                         )
                     )
                     open_fill["quantity"] -= matched
@@ -203,6 +210,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                             "timestamp": ts,
                             "exchange": fill_exchange,
                             "product": fill_product,
+                            "strategy": fill_strategy,
                         }
                     )
 
@@ -216,6 +224,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                         action="BUY",
                         quantity=open_fill["quantity"],
                         average_price=open_fill["price"],
+                        strategy=open_fill.get("strategy"),
                     )
                 )
         for open_fill in short_queue:
@@ -228,6 +237,7 @@ def compute_realized_pnl(trades: list[dict]) -> FifoResult:
                         action="SELL",
                         quantity=open_fill["quantity"],
                         average_price=open_fill["price"],
+                        strategy=open_fill.get("strategy"),
                     )
                 )
 

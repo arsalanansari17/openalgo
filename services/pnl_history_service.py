@@ -46,64 +46,115 @@ _LONG_HOLD_SEGMENTS = ("equity", "mutual_fund")
 _IST = ZoneInfo("Asia/Kolkata")
 
 
-def _open_positions_with_unrealised(api_key, open_positions, end_date):
-    """Open FIFO positions plus their unrealized P&L at the live LTP.
+def _live_open_rows(api_key, end_date, segment=None):
+    """What is open right now, valued at the live price: the source of the
+    report's unrealized P&L.
 
-    Returns (rows, total_unrealised_pnl_or_None). Unrealized P&L is only
-    meaningful as of now, so it is computed only when the requested range
-    ends today or later (IST); for an earlier end date every row carries
-    ltp/unrealized_pnl of None and the total is None. A position whose quote
-    cannot be fetched (an expired contract, a broker error) also carries
-    None and is left out of the total - the report never fails on a quote.
+    Equity comes from the broker's holdings, everything else (F&O, currency,
+    commodity) from its position book, the way Zerodha Console's Unrealised
+    view reads open holdings and positions. The FIFO replay of the ledger is
+    deliberately not used here: it cannot see fills from before the ledger
+    began and never sees an option settling at expiry, so it invents open
+    positions that the broker does not hold.
+
+    Each broker row is split into per-strategy slices by
+    services/strategy_attribution.py (an unexplained remainder is untagged).
+    Returns (rows, total_unrealized_or_None). The total is None - and rows
+    empty - when the range ends before today (unrealized P&L exists only at
+    the live price) or the broker rows cannot be read. A row whose price
+    cannot be fetched carries ltp/unrealized_pnl of None and is left out of
+    the total.
     """
-    rows = [
-        {
-            "symbol": pos.symbol,
-            "exchange": pos.exchange,
-            "product": pos.product,
-            "action": pos.action,
-            "quantity": pos.quantity,
-            "average_price": round(pos.average_price, 2),
-            "ltp": None,
-            "unrealized_pnl": None,
-        }
-        for pos in open_positions
-    ]
     if end_date < datetime.now(_IST).date().isoformat():
-        return rows, None
-    if not rows:
-        return rows, 0.0
+        return [], None
 
     try:
+        from services.holdings_service import get_holdings
+        from services.positionbook_service import get_positionbook
         from services.quotes_service import get_multiquotes
+        from services.strategy_attribution import KIND_HOLDINGS, KIND_POSITIONS, attribute
 
-        wanted = [{"symbol": r["symbol"], "exchange": r["exchange"]} for r in rows]
-        # Distinct symbols only: one position per symbol+exchange+product, but
-        # several products can share a symbol.
-        wanted = [dict(t) for t in {tuple(w.items()) for w in wanted}]
-        ok, response, _status = get_multiquotes(wanted, api_key=api_key)
+        try:
+            from database.strategy_book_db import get_strategy_legs as _get_strategy_legs
+
+            legs = _get_strategy_legs()
+        except StrategyBookUnavailable:
+            # Unknown ownership only costs the strategy label, not the P&L.
+            legs = []
+
+        ok, response, _status = get_holdings(api_key=api_key)
         if not ok:
-            return rows, None
+            return [], None
+        data = response.get("data")
+        holdings = data.get("holdings") if isinstance(data, dict) else data
+        holdings = holdings if isinstance(holdings, list) else []
 
+        ok, response, _status = get_positionbook(api_key=api_key)
+        if not ok:
+            return [], None
+        positions = response.get("data")
+        positions = positions if isinstance(positions, list) else []
+        # Equity is read from holdings only; an open intraday equity position
+        # is squared off the same day and would double a same-day delivery buy.
+        positions = [r for r in positions if derive_segment(r.get("exchange")) != "equity"]
+
+        open_rows = []
+        for kind, raw_rows in ((KIND_HOLDINGS, holdings), (KIND_POSITIONS, positions)):
+            attributed = attribute(raw_rows, legs, kind)["rows"]
+            for raw, row in zip(raw_rows, attributed, strict=True):
+                if abs(row["quantity"]) <= 1e-9:
+                    continue
+                if segment and derive_segment(row["exchange"]) != segment:
+                    continue
+                open_rows.append((kind, raw, row))
+
+        wanted = sorted({(row["symbol"], row["exchange"]) for _k, _r, row in open_rows})
         ltps = {}
-        for item in response.get("results", []):
-            data = item.get("data")
-            if isinstance(data, dict) and data.get("ltp"):
-                ltps[(item.get("symbol"), item.get("exchange"))] = float(data["ltp"])
+        if wanted:
+            ok, quotes, _status = get_multiquotes(
+                [{"symbol": sym, "exchange": exch} for sym, exch in wanted], api_key=api_key
+            )
+            if ok:
+                for item in quotes.get("results", []):
+                    quote = item.get("data")
+                    if isinstance(quote, dict) and quote.get("ltp"):
+                        ltps[(item.get("symbol"), item.get("exchange"))] = float(quote["ltp"])
 
+        rows = []
         total = 0.0
-        for r in rows:
-            ltp = ltps.get((r["symbol"], r["exchange"]))
+        for kind, raw, row in open_rows:
+            ltp = ltps.get((row["symbol"], row["exchange"]))
             if ltp is None:
-                continue
-            sign = 1 if r["action"] == "BUY" else -1
-            r["ltp"] = round(ltp, 2)
-            r["unrealized_pnl"] = round(sign * (ltp - r["average_price"]) * r["quantity"], 2)
-            total += r["unrealized_pnl"]
+                try:
+                    ltp = float(raw.get("ltp")) or None
+                except (TypeError, ValueError):
+                    ltp = None
+            for part in row["slices"]:
+                quantity = part["quantity"]
+                if abs(quantity) <= 1e-9:
+                    continue
+                unrealized = None
+                if ltp is not None:
+                    unrealized = round((ltp - part["average_price"]) * quantity, 2)
+                    total += unrealized
+                rows.append(
+                    {
+                        "symbol": row["symbol"],
+                        "exchange": row["exchange"],
+                        "product": row["product"],
+                        "source": kind,
+                        "action": "BUY" if quantity > 0 else "SELL",
+                        "quantity": abs(quantity),
+                        "average_price": round(part["average_price"], 2),
+                        "strategy": part["strategy"] if part["attributed"] else None,
+                        "ltp": None if ltp is None else round(ltp, 2),
+                        "unrealized_pnl": unrealized,
+                    }
+                )
         return rows, round(total, 2)
     except Exception:
-        logger.exception("Could not fetch quotes for unrealized P&L")
-        return rows, None
+        logger.exception("Could not read live holdings and positions for unrealized P&L")
+        return [], None
 
 
 def _parse_range_and_build_query(
@@ -238,6 +289,7 @@ def get_pnl_history(
                 "quantity": row.quantity,
                 "average_price": row.average_price,
                 "trade_timestamp": row.trade_timestamp.isoformat(),
+                "strategy": row.strategy,
             }
             for row in rows
         ]
@@ -257,9 +309,7 @@ def get_pnl_history(
             if lot.exit_timestamp and start_date <= str(lot.exit_timestamp)[:10] <= end_date
         ]
         daily = summarize_by_day(lots_in_range)
-        open_rows, total_unrealised = _open_positions_with_unrealised(
-            api_key, result.open_positions, end_date
-        )
+        open_rows, total_unrealised = _live_open_rows(api_key, end_date, segment)
 
         # Raw-fill count inside the requested range specifically (not the
         # wider fifo_lookback query above) - matches what "N trades this
@@ -297,6 +347,7 @@ def get_pnl_history(
                             "exit_price": round(lot.exit_price, 2),
                             "exit_timestamp": str(lot.exit_timestamp),
                             "realized_pnl": round(lot.realized_pnl, 2),
+                            "strategy": lot.strategy,
                         }
                         for lot in lots_in_range
                     ],

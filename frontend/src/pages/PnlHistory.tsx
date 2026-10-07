@@ -53,20 +53,16 @@ import { showToast } from '@/utils/toast'
 
 type PnlMode = 'combined' | 'realized' | 'unrealized'
 
-const PNL_MODE_LABEL: Record<PnlMode, string> = {
-  combined: 'Combined',
-  realized: 'Realized P&L',
-  unrealized: 'Unrealized P&L',
-}
-
 function defaultStartDate(): string {
   const d = new Date()
   d.setDate(d.getDate() - 30)
-  return d.toISOString().split('T')[0]
+  return d.toLocaleDateString('en-CA')
 }
 
+// Local calendar date; toISOString() would be the UTC date, still yesterday
+// before 05:30 IST.
 function defaultEndDate(): string {
-  return new Date().toISOString().split('T')[0]
+  return new Date().toLocaleDateString('en-CA')
 }
 
 interface DayRow {
@@ -104,8 +100,10 @@ function pnlHeatColor(value: number, maxAbs: number): string {
   return value > 0 ? `rgba(34, 197, 94, ${alpha})` : `rgba(239, 68, 68, ${alpha})`
 }
 
-function scripKey(symbol: string, exchange: string, product: string | null): string {
-  return `${symbol}|${exchange}|${product ?? ''}`
+// Product is left out of the key: ledger lots can carry no product (CSV imports)
+// while the same scrip held now is CNC, and they are one scrip.
+function scripKey(symbol: string, exchange: string): string {
+  return `${symbol}|${exchange}`
 }
 
 function toggle(list: string[], value: string): string[] {
@@ -116,19 +114,13 @@ export default function PnlHistory() {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = makeFormatCurrency(user?.broker)
 
-  // Applied fetch parameters. The Fetch dialog edits drafts (d*) and applies
-  // them together, so nothing changes until the user clicks Fetch there.
   const [segment, setSegment] = useState<'all' | Segment>('all')
   const [startDate, setStartDate] = useState(defaultStartDate())
   const [endDate, setEndDate] = useState(defaultEndDate())
-  const [pnlMode, setPnlMode] = useState<PnlMode>('combined')
-
-  const [fetchOpen, setFetchOpen] = useState(false)
-  const [dSegment, setDSegment] = useState<'all' | Segment>('all')
-  const [dStart, setDStart] = useState(startDate)
-  const [dEnd, setDEnd] = useState(endDate)
-  const [dMode, setDMode] = useState<PnlMode>('combined')
   const [activeDatePreset, setActiveDatePreset] = useState<string | null>(null)
+  // Which P&L the report shows. The response always carries both sides, so
+  // switching is instant; Fetch refreshes the data.
+  const [pnlMode, setPnlMode] = useState<PnlMode>('combined')
 
   const [isLoading, setIsLoading] = useState(false)
   const [hasFetched, setHasFetched] = useState(false)
@@ -142,26 +134,32 @@ export default function PnlHistory() {
   // Table filters (client-side, applied to whichever table is showing).
   const [filterOpen, setFilterOpen] = useState(false)
   const [symbolFilter, setSymbolFilter] = useState('')
+  const [strategyFilters, setStrategyFilters] = useState<string[]>([])
   const [exchangeFilter, setExchangeFilter] = useState<string[]>([])
   const [productFilter, setProductFilter] = useState<string[]>([])
 
   const showRealized = pnlMode !== 'unrealized'
   const showUnrealized = pnlMode !== 'realized'
 
-  const loadHistory = async (start: string, end: string, seg: 'all' | Segment) => {
+  // Optional overrides let a date-range preset fetch immediately with the
+  // range it just picked, rather than the (stale, pre-setState) closure
+  // values of startDate/endDate.
+  const fetchHistory = async (overrideStart?: string, overrideEnd?: string) => {
+    const effectiveStart = overrideStart ?? startDate
+    const effectiveEnd = overrideEnd ?? endDate
     if (!apiKey) {
       showToast.error('API key not available', 'system')
       return
     }
-    if (!start || !end) {
+    if (!effectiveStart || !effectiveEnd) {
       showToast.warning('Select both a start and end date', 'system')
       return
     }
 
     setIsLoading(true)
     try {
-      const response = await tradingApi.getPnlHistory(apiKey, start, end, {
-        segment: seg === 'all' ? undefined : seg,
+      const response = await tradingApi.getPnlHistory(apiKey, effectiveStart, effectiveEnd, {
+        segment: segment === 'all' ? undefined : segment,
       })
       if (response.status === 'success' && response.data) {
         setClosedTrades(response.data.closed_trades)
@@ -178,19 +176,11 @@ export default function PnlHistory() {
     }
   }
 
-  const applyFetch = () => {
-    setSegment(dSegment)
-    setStartDate(dStart)
-    setEndDate(dEnd)
-    setPnlMode(dMode)
-    setFetchOpen(false)
-    loadHistory(dStart, dEnd, dSegment)
-  }
-
   const handleDatePresetSelect = (start: string, end: string, key: string) => {
-    setDStart(start)
-    setDEnd(end)
+    setStartDate(start)
+    setEndDate(end)
     setActiveDatePreset(key)
+    fetchHistory(start, end)
   }
 
   // Filter options come from whatever the report returned.
@@ -213,32 +203,50 @@ export default function PnlHistory() {
     [closedTrades, openPositions]
   )
 
+  const strategyOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...closedTrades.map((t) => t.strategy), ...openPositions.map((p) => p.strategy)].filter(
+            (n): n is string => !!n
+          )
+        )
+      ).sort(),
+    [closedTrades, openPositions]
+  )
+
   const hasActiveFilters =
-    symbolFilter.trim() !== '' || exchangeFilter.length > 0 || productFilter.length > 0
+    symbolFilter.trim() !== '' ||
+    exchangeFilter.length > 0 ||
+    productFilter.length > 0 ||
+    strategyFilters.length > 0
 
   const clearFilters = () => {
     setSymbolFilter('')
     setExchangeFilter([])
     setProductFilter([])
+    setStrategyFilters([])
   }
 
   const matchesFilters = useCallback(
-    (symbol: string, exchange: string, product: string | null) => {
+    (symbol: string, exchange: string, product: string | null, strategy: string | null) => {
       if (symbolFilter.trim() && !symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase()))
         return false
       if (exchangeFilter.length > 0 && !exchangeFilter.includes(exchange)) return false
       if (productFilter.length > 0 && !(product && productFilter.includes(product))) return false
+      if (strategyFilters.length > 0 && !(strategy && strategyFilters.includes(strategy)))
+        return false
       return true
     },
-    [symbolFilter, exchangeFilter, productFilter]
+    [symbolFilter, exchangeFilter, productFilter, strategyFilters]
   )
 
   const filteredClosed = useMemo(
-    () => closedTrades.filter((t) => matchesFilters(t.symbol, t.exchange, t.product)),
+    () => closedTrades.filter((t) => matchesFilters(t.symbol, t.exchange, t.product, t.strategy)),
     [closedTrades, matchesFilters]
   )
   const filteredOpen = useMemo(
-    () => openPositions.filter((p) => matchesFilters(p.symbol, p.exchange, p.product)),
+    () => openPositions.filter((p) => matchesFilters(p.symbol, p.exchange, p.product, p.strategy)),
     [openPositions, matchesFilters]
   )
 
@@ -280,7 +288,7 @@ export default function PnlHistory() {
   const scripRows: ScripRow[] = useMemo(() => {
     const rows = new Map<string, ScripRow>()
     const blank = (symbol: string, exchange: string, product: string | null): ScripRow => ({
-      key: scripKey(symbol, exchange, product),
+      key: scripKey(symbol, exchange),
       symbol,
       exchange,
       product,
@@ -296,7 +304,7 @@ export default function PnlHistory() {
     })
     if (showRealized) {
       for (const t of filteredClosed) {
-        const key = scripKey(t.symbol, t.exchange, t.product)
+        const key = scripKey(t.symbol, t.exchange)
         const row = rows.get(key) ?? blank(t.symbol, t.exchange, t.product)
         const isLong = t.entry_action === 'BUY'
         row.closedQuantity += t.quantity
@@ -307,13 +315,18 @@ export default function PnlHistory() {
       }
     }
     if (showUnrealized) {
+      // One broker row can arrive as several per-strategy slices; they merge
+      // into the scrip with a quantity-weighted average price.
+      const notional = new Map<string, number>()
       for (const p of filteredOpen) {
-        const key = scripKey(p.symbol, p.exchange, p.product)
+        const key = scripKey(p.symbol, p.exchange)
         const row = rows.get(key) ?? blank(p.symbol, p.exchange, p.product)
-        row.openQuantity += p.quantity
-        row.averagePrice = p.average_price
+        if (!row.product) row.product = p.product
+        row.openQuantity += p.action === 'BUY' ? p.quantity : -p.quantity
+        notional.set(key, (notional.get(key) ?? 0) + p.quantity * p.average_price)
+        row.averagePrice = (notional.get(key) ?? 0) / Math.abs(row.openQuantity || 1)
         row.ltp = p.ltp
-        row.unrealized = p.unrealized_pnl
+        if (p.unrealized_pnl != null) row.unrealized = (row.unrealized ?? 0) + p.unrealized_pnl
         rows.set(key, row)
       }
     }
@@ -442,28 +455,73 @@ export default function PnlHistory() {
         </div>
       </div>
 
-      {/* Fetch: date range, Segment and P&L type apply together on Fetch. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          {startDate} to {endDate}
-          {segment !== 'all' && ` | ${segment}`}
-          {` | ${PNL_MODE_LABEL[pnlMode]}`}
-        </p>
-        <Dialog
-          open={fetchOpen}
-          onOpenChange={(open) => {
-            if (open) {
-              setDSegment(segment)
-              setDStart(startDate)
-              setDEnd(endDate)
-              setDMode(pnlMode)
-              setActiveDatePreset(null)
-            }
-            setFetchOpen(open)
-          }}
-        >
-          <DialogTrigger asChild>
-            <Button disabled={isLoading} aria-label="Open fetch options">
+      {/* Fetch: Segment, date range and P&L type. Symbol and Strategy live in
+          the Filters popup above the tables, since they only narrow what was
+          already fetched. */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="pnl-segment">Segment</Label>
+              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
+                <SelectTrigger id="pnl-segment">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="equity">Equity</SelectItem>
+                  <SelectItem value="fno">Futures & Options</SelectItem>
+                  <SelectItem value="currency">Currency</SelectItem>
+                  <SelectItem value="commodity">Commodity</SelectItem>
+                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="pnl-mode">P&L</Label>
+              <Select value={pnlMode} onValueChange={(v) => setPnlMode(v as PnlMode)}>
+                <SelectTrigger id="pnl-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="combined">Combined</SelectItem>
+                  <SelectItem value="realized">Realized P&L</SelectItem>
+                  <SelectItem value="unrealized">Unrealized P&L</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="pnl-start-date">Start date</Label>
+              <Input
+                id="pnl-start-date"
+                type="date"
+                value={startDate}
+                max={endDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value)
+                  setActiveDatePreset(null)
+                }}
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="pnl-end-date">End date</Label>
+              <Input
+                id="pnl-end-date"
+                type="date"
+                value={endDate}
+                min={startDate}
+                max={defaultEndDate()}
+                onChange={(e) => {
+                  setEndDate(e.target.value)
+                  setActiveDatePreset(null)
+                }}
+              />
+            </div>
+            <Button
+              onClick={() => fetchHistory()}
+              disabled={isLoading}
+              aria-label="Fetch P&L history"
+            >
               {isLoading ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
@@ -471,95 +529,22 @@ export default function PnlHistory() {
               )}
               Fetch
             </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Fetch P&L</DialogTitle>
-              <DialogDescription>
-                Choose the date range and which P&L to show, then fetch.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-2">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <Label htmlFor="pnl-start-date">Start date</Label>
-                  <Input
-                    id="pnl-start-date"
-                    type="date"
-                    value={dStart}
-                    max={dEnd}
-                    onChange={(e) => {
-                      setDStart(e.target.value)
-                      setActiveDatePreset(null)
-                    }}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="pnl-end-date">End date</Label>
-                  <Input
-                    id="pnl-end-date"
-                    type="date"
-                    value={dEnd}
-                    min={dStart}
-                    max={defaultEndDate()}
-                    onChange={(e) => {
-                      setDEnd(e.target.value)
-                      setActiveDatePreset(null)
-                    }}
-                  />
-                </div>
-              </div>
+          </div>
+          {/* Spacer matches the combined width of Segment+P&L (2 flex-1
+              fields) so the chip row lands under Start/End date. */}
+          <div className="flex flex-col sm:flex-row gap-4 mt-4">
+            <div className="hidden sm:block flex-[2]" />
+            <div className="flex-[2]">
               <DateRangePresets activeKey={activeDatePreset} onSelect={handleDatePresetSelect} />
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <Label htmlFor="pnl-segment">Segment</Label>
-                  <Select value={dSegment} onValueChange={(v) => setDSegment(v as typeof dSegment)}>
-                    <SelectTrigger id="pnl-segment">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="equity">Equity</SelectItem>
-                      <SelectItem value="fno">Futures & Options</SelectItem>
-                      <SelectItem value="currency">Currency</SelectItem>
-                      <SelectItem value="commodity">Commodity</SelectItem>
-                      <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="pnl-mode">P&L</Label>
-                  <Select value={dMode} onValueChange={(v) => setDMode(v as PnlMode)}>
-                    <SelectTrigger id="pnl-mode">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="combined">Combined</SelectItem>
-                      <SelectItem value="realized">Realized P&L</SelectItem>
-                      <SelectItem value="unrealized">Unrealized P&L</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Realized counts only booked positions. Unrealized counts only positions still open,
-                at the live price, so it is available only when the end date is today.
-              </p>
             </div>
-            <DialogFooter>
-              <Button variant="ghost" onClick={() => setFetchOpen(false)}>
-                Cancel
-              </Button>
-              <Button onClick={applyFetch}>Fetch</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {!hasFetched && !isLoading && (
         <div className="text-center py-16 text-muted-foreground">
           <p className="font-medium">Build a report</p>
-          <p className="text-sm">Click Fetch and pick a date range</p>
+          <p className="text-sm">Pick a date range above and click Fetch</p>
         </div>
       )}
 
@@ -700,7 +685,7 @@ export default function PnlHistory() {
                   <DialogHeader>
                     <DialogTitle>Table Filters</DialogTitle>
                     <DialogDescription>
-                      Narrow the Day-wise and Scrip-wise tables by symbol, exchange or product
+                      Narrow the Day-wise and Scrip-wise tables by symbol, strategy, exchange or product
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-6 py-4">
@@ -713,6 +698,16 @@ export default function PnlHistory() {
                         onChange={(e) => setSymbolFilter(e.target.value)}
                       />
                     </div>
+                    {strategyOptions.length > 0 && (
+                      <div className="space-y-2">
+                        <Label>Strategy</Label>
+                        <FilterChip
+                          options={strategyOptions}
+                          selected={strategyFilters}
+                          onToggle={(v) => setStrategyFilters((prev) => toggle(prev, v))}
+                        />
+                      </div>
+                    )}
                     {exchangeOptions.length > 0 && (
                       <div className="space-y-2">
                         <Label>Exchange</Label>

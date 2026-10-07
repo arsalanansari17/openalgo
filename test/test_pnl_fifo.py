@@ -148,3 +148,104 @@ def test_different_symbols_are_still_separate_positions():
 
     assert result.realized_lots == []
     assert len(result.open_positions) == 2
+
+
+def test_lot_and_open_position_carry_the_entry_fill_strategy():
+    buy_a = {**_trade("BUY", 10, 100, "2026-10-01T10:00:00"), "strategy": "A"}
+    sell_untagged = _trade("SELL", 4, 110, "2026-10-02T10:00:00")
+    buy_b = {**_trade("BUY", 5, 120, "2026-10-03T10:00:00"), "strategy": "B"}
+
+    result = compute_realized_pnl([buy_a, sell_untagged, buy_b])
+
+    # The closing fill is untagged; the lot still belongs to the entry's strategy.
+    assert [lot.strategy for lot in result.realized_lots] == ["A"]
+    assert sorted((p.strategy, p.quantity) for p in result.open_positions) == [("A", 6), ("B", 5)]
+
+
+def test_unrealized_reads_live_holdings_and_positions_not_the_ledger(monkeypatch):
+    import database.strategy_book_db as book
+    from services import holdings_service, positionbook_service, quotes_service
+    from services.pnl_history_service import _live_open_rows
+
+    monkeypatch.setattr(
+        book,
+        "get_strategy_legs",
+        lambda strategy=None: [
+            {
+                "strategy": "A",
+                "symbol": "INFY",
+                "exchange": "NSE",
+                "product": "CNC",
+                "quantity": 6,
+                "average_price": 95.0,
+                "today_realized_pnl": 0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        holdings_service,
+        "get_holdings",
+        lambda api_key=None: (
+            True,
+            {
+                "data": {
+                    "holdings": [
+                        {"symbol": "INFY", "exchange": "NSE", "product": "CNC", "quantity": 10,
+                         "t1_quantity": 0, "pledged_quantity": 0, "average_price": 100.0}
+                    ]
+                }
+            },
+            200,
+        ),
+    )
+    monkeypatch.setattr(
+        positionbook_service,
+        "get_positionbook",
+        lambda api_key=None: (
+            True,
+            {
+                "data": [
+                    # Short option: open, valued at the live price.
+                    {"symbol": "NIFTYCE", "exchange": "NFO", "product": "NRML", "quantity": -50,
+                     "average_price": 100.0},
+                    # Intraday equity is read from holdings only, so it is skipped.
+                    {"symbol": "INFY", "exchange": "NSE", "product": "MIS", "quantity": 5,
+                     "average_price": 100.0},
+                    # Flat rows are not open.
+                    {"symbol": "FLAT", "exchange": "NFO", "product": "NRML", "quantity": 0,
+                     "average_price": 0.0},
+                ]
+            },
+            200,
+        ),
+    )
+    monkeypatch.setattr(
+        quotes_service,
+        "get_multiquotes",
+        lambda wanted, api_key=None: (
+            True,
+            {
+                "results": [
+                    {"symbol": "INFY", "exchange": "NSE", "data": {"ltp": 110}},
+                    {"symbol": "NIFTYCE", "exchange": "NFO", "data": {"ltp": 90}},
+                ]
+            },
+            200,
+        ),
+    )
+
+    rows, total = _live_open_rows("key", "2999-01-01")
+
+    by_key = {(r["symbol"], r["strategy"]): r for r in rows}
+    # The holding splits into the strategy's 6 shares and the untagged remainder of 4.
+    assert by_key[("INFY", "A")]["unrealized_pnl"] == 90.0
+    assert by_key[("INFY", None)]["unrealized_pnl"] == 10.0
+    assert by_key[("INFY", None)]["source"] == "holdings"
+    # A short gains when the price falls: (90 - 100) * -50.
+    assert by_key[("NIFTYCE", None)]["unrealized_pnl"] == 500.0
+    assert by_key[("NIFTYCE", None)]["action"] == "SELL"
+    assert len(rows) == 3
+    assert total == 600.0
+
+    # A range that ended before today has no live price to value against.
+    assert _live_open_rows("key", "2000-01-01") == ([], None)

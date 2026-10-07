@@ -52,6 +52,8 @@ export interface PnlHistoryClosedTrade {
   exit_price: number
   exit_timestamp: string
   realized_pnl: number
+  // Strategy tag of the entry fill; null when untagged.
+  strategy: string | null
 }
 
 export interface PnlHistoryOpenPosition {
@@ -61,8 +63,11 @@ export interface PnlHistoryOpenPosition {
   action: string
   quantity: number
   average_price: number
-  // Live price and P&L on the open quantity; null when the range ends
-  // before today or the position has no live quote (expired contract).
+  // holdings (equity) or positions (everything else)
+  source: 'holdings' | 'positions'
+  strategy: string | null
+  // Live price and P&L on the open quantity; null when the position has no
+  // live quote.
   ltp: number | null
   unrealized_pnl: number | null
 }
