@@ -16,6 +16,7 @@ import {
   Key,
   Layers,
   LayoutDashboard,
+  LineChart,
   type LucideIcon,
   MessageCircle,
   MessageSquare,
@@ -67,6 +68,7 @@ export const navItems: NavItem[] = [
     children: [
       { href: '/tradebook', label: 'Tradebook', icon: FileText },
       { href: '/pnl-history', label: 'P&L', icon: PieChart },
+      { href: '/pnl-curve', label: 'P&L Curve', icon: LineChart },
     ],
   },
 ]

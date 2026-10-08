@@ -205,6 +205,17 @@ def react_tradebook():
     return serve_react_app()
 
 
+# Fork-only report pages (SKYSHIELD_PATCHES.md).
+@react_bp.route("/pnl-history", strict_slashes=False)
+def react_pnl_history():
+    return serve_react_app()
+
+
+@react_bp.route("/pnl-curve", strict_slashes=False)
+def react_pnl_curve():
+    return serve_react_app()
+
+
 @react_bp.route("/holdings")
 def react_holdings():
     return serve_react_app()
