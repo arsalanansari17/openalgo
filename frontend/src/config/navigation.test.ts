@@ -40,10 +40,14 @@ describe('Navigation Config', () => {
     // Fork-only (SKYSHIELD_PATCHES.md): Reports is a dropdown, not a direct
     // link - Tradebook moved out of its own top-level slot and into here
     // alongside the new P&L report.
-    it('groups Tradebook and P&L under a Reports dropdown', () => {
+    it('groups Tradebook, P&L and P&L Curve under a Reports dropdown', () => {
       const reports = navItems.find((item) => item.label === 'Reports')
       expect(reports).toBeDefined()
-      expect(reports?.children?.map((child) => child.label)).toEqual(['Tradebook', 'P&L'])
+      expect(reports?.children?.map((child) => child.label)).toEqual([
+        'Tradebook',
+        'P&L',
+        'P&L Curve',
+      ])
       expect(navItems.some((item) => item.label === 'Tradebook')).toBe(false)
     })
   })
