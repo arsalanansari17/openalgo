@@ -6,6 +6,33 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-09 - Positions page: real entry average for carried Kotak legs
+
+**Files:** `frontend/src/lib/trading/strategyAttribution.ts` (`applyCostBasis`, `hasCarryForwardValuation`),
+`frontend/src/pages/Positions.tsx` (feeds the live-price hook with the corrected rows, fetches attribution when a
+flagged row exists, a tooltip on the average), `frontend/src/types/trading.ts` (`average_price_basis`),
+`strategyAttribution.test.ts` (10 new cases). Frontend only: the Kotak adapter and upstream's `/positionbook` are
+untouched. **Upstream:** the behaviour is in upstream code (broker/kotak/mapping/order_data.py): a leg carried over
+from a previous day reports the previous settlement price as its "average" (issue marketcalls/openalgo#2061,
+closed; its fix uses `upldPrc` where Kotak sends one, and it is 0.00 on our accounts). Kotak's other endpoints are all
+current-day, so the cost basis of an overnight leg is not reachable through its API; nothing to patch in the adapter.
+
+**Problem.** acc3 (Kotak) NDS BEAR_CALL carried overnight: the table showed NIFTY13OCT2622800CE -130 at 12.35 and
+23000CE at 6.20 (the previous settlement), P&L -559 / -34.8%, against real entries of 59.85 and 22.65 (about +3,478
+at the live prices). OpenAlgo's Positions page (flat table) and AlgoMirror both showed it; the by-strategy view was
+already right because its slices come from the strategy book.
+
+**Fix.** A row the adapter flags `average_price_basis = carry_forward_valuation` gets the strategy book's quantity-
+weighted entry average, and P&L / percent are recomputed from it and the live price (plus what the strategies realized
+today on the contract), only when the book fully explains the row: every open slice attributed, all on the broker's
+side, adding up to the broker quantity, no mismatch. Any other row (no flag, closed, another broker, unexplained) is
+returned as the same object. It runs before `useLivePrice`, which recomputes P&L from `average_price`. A flagged row
+that cannot be corrected keeps Kotak's numbers with an asterisk and a tooltip saying what they are. **Verified on:**
+unit tests (54 passing with the Positions and M2M page tests, tsc clean, `biome lint` clean for these files); live
+check on acc3 pending.
+
+---
+
 ## 2026-10-06 - P&L Tracker: P&L | M2M curve, per symbol and product
 
 **Files:** `services/pnl_tracker_m2m.py` (new), `blueprints/pnltracker.py` (33 added lines, nothing removed: a hook
