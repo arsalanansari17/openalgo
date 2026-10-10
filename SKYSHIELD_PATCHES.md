@@ -28,8 +28,13 @@ today on the contract), only when the book fully explains the row: every open sl
 side, adding up to the broker quantity, no mismatch. Any other row (no flag, closed, another broker, unexplained) is
 returned as the same object. It runs before `useLivePrice`, which recomputes P&L from `average_price`. A flagged row
 that cannot be corrected keeps Kotak's numbers with an asterisk and a tooltip saying what they are. **Verified on:**
-unit tests (54 passing with the Positions and M2M page tests, tsc clean, `biome lint` clean for these files); live
-check on acc3 pending.
+unit tests (54 passing with the Positions and M2M page tests, tsc clean, `biome lint` clean for these files). **Deployed
+2026-10-10 (Saturday) to acc3, acc1, acc2** at fork `main` `86e795fb7`, served bundle `index-DMyDnP-x.js`, no errors since the
+restarts, bot sanity 60 / 61 / 61 passed with 0 failed; DB backups in `db/backup_20261010_pre_costbasis/`. Live data on acc3: the
+BULL_PUT carried from Friday is flagged by Kotak with averages 15.45 / 7.75 (Friday's settlement) while the book has 33.05 / 14.50, same
+quantities, so the page now shows the book's figures; acc1 / acc2 (Zerodha) rows carry no flag and are untouched. **CI note:** GitHub
+Actions created no run for any push or pull request on the fork since 2026-10-08 19:22 UTC, so `frontend/dist` was built locally
+(same `npm run build`) and committed as `86e795fb7`; this deploy also shipped the P&L Curve page and the earlier filters/popups commits.
 
 ---
 
