@@ -13,6 +13,13 @@ never `origin` (upstream). Rollback branch on the fork: `upgrade-main-2026-09-27
 
 ### Do next
 
+- [ ] **GitHub Actions create no runs on the fork** (2026-10-10). Pushes to `fork/main` and the probe PR started no
+  workflow runs, so CI (and the `commit-dist` bot that rebuilds `frontend/dist`) is not running; fork `main` carries a
+  locally built dist meanwhile. Next action (user): check the fork's Actions tab (workflows enabled?), Settings ->
+  Billing / Actions minutes, and GitHub emails about disabled Actions; then push a trivial commit and confirm a run.
+- [ ] **Upstream draft PR #2202** (Kotak carried-leg average on Positions, frontend only) is stacked on #2181 and waits
+  for it (2026-10-10). Next action: when #2181 merges upstream, rebase `fix/kotak-carry-forward-average` onto `main`
+  (only its last commit is new), mark #2202 ready, drop the matching fork patch note once upstream has it.
 - [ ] **Gunicorn's eventlet worker is deprecated** (warning at every start: "will be removed in Gunicorn 26"; our pin
   is `gunicorn>=25.0,<26`). Our #1421 patches and eventlet assumptions depend on it. Plan before Gunicorn 26 / upstream
   dropping eventlet: evaluate `OPENALGO_WORKER_CLASS=gthread` (opt-in, upstream guide `docs/gthread/README.md`) on one
@@ -48,12 +55,6 @@ Plan: `~/.claude/plans/let-s-first-make-a-tingly-wreath.md`. Source of truth is 
   figure (default); M2M = today's move from fills and yesterday's close, verified exact against Zerodha (acc1) and
   Kotak (acc3) on real rows. Next action: user reviews the diff, commit, deploy after 15:40 IST, then check in the
   browser (Positions > P&L | M2M).
-- [ ] **Fork `main` is AHEAD of what the VMs run (2026-10-06 night) - do not deploy before the market closes.** All three
-  VMs run `f5e77130a` (verified: sanity passed on each, bots active). Two later commits on `main` port upstream PR #2181's
-  two review rounds (bad data and unusable fills, stale and duplicate requests, the tracker naming its basis, Holdings
-  and Positions fixes). Tests pass (111 backend, 59 frontend) but they are NOT deployed. Next action: deploy to acc1,
-  acc2, acc3 only after 15:40 IST on a trading day, with a DB backup, then the bot sanity check on each, and not on a day
-  you cannot watch it. Rollback = `git checkout f5e77130a` and restart OpenAlgo.
 - [ ] **P&L Tracker with the P&L | M2M switch, deployed to acc1** (2026-10-06; acc2 and acc3 not yet): `services/pnl_tracker_m2m.py` + a 33-line hook in
   `blueprints/pnltracker.py` + a switch on the page; replayed on acc1 with real data (P&L basis ends on 3,906.50, M2M on
   10,887.50, each equal to the Positions page). Reviewed by the user on acc1. Next action: acc2 and acc3 after 15:40 IST,
@@ -109,8 +110,30 @@ Plan: `~/.claude/plans/let-s-first-make-a-tingly-wreath.md`. Source of truth is 
 - [ ] `websocket_proxy/server.py` `authenticate_client()` calls `adapter.connect()`
   synchronously inside a coroutine (latent bug, shows up when `threading.Event`
   is monkey-patched). Issue still "to file".
+- [ ] **Charges and brokerage in P&L (backlog, 2026-10-08; parked by the user as complex).** Net-of-charges P&L: a
+  Gross / Net toggle, a Charges column and card, and a charges figure per order in Trade Book. Plan agreed in
+  conversation: `utils/charges.py` (pure, computed on read from fills grouped by order id) with a dated rate table
+  (STT/CTT, exchange, SEBI, stamp duty, GST, DP); Console's method (net realized = gross minus the charges on all fills
+  in the period, by trade date). Zerodha (acc1, acc2) charges brokerage on API and manual orders alike; Kotak (acc3,
+  2026 only) charges brokerage only on manual orders, so a new `origin` column (api / manual / unknown) on
+  `tradebook_fills` is set at the 16:00 capture from the Kotak `GuiOrdId` (`openalgo-` prefix), `order_latency`
+  order ids and strategy tags, with a per-account "API since" date and a manual override. Zerodha history back to 2019
+  needs per-year rate periods checked against Console's charges figure; Kotak from 2026 only. Related gap to fix with
+  or before it: options held to expiry have no closing fill, so Realized misses their settlement. Next action: when
+  picked up, Phase 1 = read acc3's trade rows and compare `GuiOrdId` on API vs manual orders, and check which order
+  endpoints write `order_latency`. Needs from the user: Kotak manual-order brokerage and a 2026 statement, a Console
+  P&L report with the charges summary per FY (start FY 2025-26), the Kotak API-since date.
 
 ## Done
+- 2026-10-07 fork `main` `d2c2feca6` (the two upstream-review fix rounds on top of `f5e77130a`, CI dist bundle
+  `assets/index-f5kuyd7I.js`) deployed to acc1, acc2, acc3 after the close (15:59-16:07 IST; acc2 and acc3 in parallel to
+  finish before the 16:15 auto-stop). Per VM: DB backup in `db/backup_20261007_pre_reviewfixes/` (openalgo.db +
+  tradebook.db), fast-forward merge, restart, service active, served bundle = expected, empty POST to
+  `/api/v1/pnl/attribution` = 400, no errors since the restart (acc3: Kotak order-update WS lost its first connection
+  26 s after the restart and reconnected within 1 s, the same first-connect pattern as the 08:00 boot). Bot pinned to
+  `e45851e` (margin change), sanity 0 failed on each; acc2's first boot sanity failed once on "ExpiryFade daily history:
+  0 daily bars" right after the OpenAlgo restart (the bot exited), a second restart passed (60 passed, 0 failed). Rollback
+  = `git checkout f5e77130a` and restart OpenAlgo. VMs stopped (TERMINATED), 08:00 schedule unchanged.
 - 2026-10-04 CI on the fork: Docker image jobs now run only on marketcalls/openalgo (no more failure emails); the CI
   dist-rebuild commit `84fdb199d` pulled in and deployed to the VMs.
 - 2026-10-04 fork `main` (`bbbab68ec` = upstream `ad2a3f505` + our patches) deployed to acc1, acc2, acc3 (previous

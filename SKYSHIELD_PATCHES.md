@@ -38,6 +38,15 @@ Actions created no run for any push or pull request on the fork since 2026-10-08
 
 ---
 
+## 2026-10-07 - Deployed: upstream-review fix rounds (no new patch)
+
+**Files:** none new. Fork `main` `d2c2feca6` (`ad5825f5a` second review round, `eb8de94ea` types, CI dist bundle) is now on acc1, acc2, acc3
+(previously `f5e77130a`). **Verified on:** all three VMs after the close, 2026-10-07 (service active, served bundle
+`index-f5kuyd7I.js`, `/api/v1/pnl/attribution` empty POST = 400, no errors since the restart, bot sanity 0 failed). DB backups in
+`db/backup_20261007_pre_reviewfixes/` on each VM.
+
+---
+
 ## 2026-10-06 - P&L Tracker: P&L | M2M curve, per symbol and product
 
 **Files:** `services/pnl_tracker_m2m.py` (new), `blueprints/pnltracker.py` (33 added lines, nothing removed: a hook
