@@ -155,3 +155,28 @@ def test_symbols_needing_closes_skips_flat_positions():
     ]
     needed = symbols_needing_closes(fills, BASE, DAYS[-1])
     assert needed == {("HELD", "NSE")}
+
+
+def test_same_day_sell_then_buy_is_an_intraday_short_and_leaves_nothing_open():
+    # Sold first, bought back the same day years ago (imported, product unknown), then a
+    # normal buy and sell inside the range. The old round trip must not sit in front of
+    # the new lot in the queue.
+    old = date(2021, 4, 20)
+    fills = [
+        fill("SELL", 340, 510, old, hour=12, product=None, strategy=None),
+        fill("BUY", 340, 508.4, old, hour=14, product=None, strategy=None),
+        fill("BUY", 45, 100, DAYS[0], product=None, strategy="S"),
+        fill("SELL", 45, 125, DAYS[2], product=None, strategy="S"),
+    ]
+    out = build_curve(fills, CLOSES, DAYS, BASE)
+    s = out["by_strategy"]["S"]
+    assert s["realized"] == [0.0, 0.0, 45 * 25.0, 0.0]
+    assert s["unrealized"][3] == 0.0
+    assert "Untagged" not in out["by_strategy"]
+    assert out["notes"]["orphan_sells"] == []
+
+
+def test_a_short_that_survives_the_day_is_dropped_and_reported():
+    out = build_curve([fill("SELL", 10, 110, DAYS[0], product=None)], CLOSES, DAYS, BASE)
+    assert out["by_strategy"] == {}
+    assert out["notes"]["orphan_sells"][0]["symbol"] == "ABC"

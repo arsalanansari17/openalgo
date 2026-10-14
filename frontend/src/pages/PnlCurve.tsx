@@ -93,9 +93,11 @@ const INK = {
   dark: { total: '#ffffff', untagged: '#8f8e86', other: '#a9a89f', text: '#c3c2b7' },
 }
 
-const CHART_HEIGHT = 520
 const CURVE_PANE_HEIGHT = 400
-const DRAWDOWN_PANE_HEIGHT = CHART_HEIGHT - CURVE_PANE_HEIGHT
+const DRAWDOWN_PANE_HEIGHT = 120
+// The Realized and Unrealized panes shown under the combined curve.
+const SPLIT_PANE_HEIGHT = 140
+const SPLIT_NAMES = ['Realized', 'Unrealized'] as const
 
 const MONTH_LABELS = [
   'Jan',
@@ -303,8 +305,8 @@ export default function PnlCurve() {
       if (daily) out.push({ name, color, width: 2, values: cumulative(daily) })
     }
     if (splitLines) {
-      out.push({ name: 'Realized', color: '#16a34a', width: 1, values: splitLines.realized })
-      out.push({ name: 'Unrealized', color: '#d97706', width: 1, values: splitLines.unrealized })
+      out.push({ name: 'Realized', color: '#16a34a', width: 2, values: splitLines.realized })
+      out.push({ name: 'Unrealized', color: '#d97706', width: 2, values: splitLines.unrealized })
     }
     return out
   }, [series, totalCum, orderedNames, isDark, splitLines])
@@ -338,6 +340,11 @@ export default function PnlCurve() {
 
   const strategyNames = chips.filter((c) => c.name !== TOTAL).map((c) => c.name)
 
+  // Realized and Unrealized get a pane each in the combined view.
+  const hasSplitPanes = splitLines !== null
+  const chartHeight =
+    CURVE_PANE_HEIGHT + DRAWDOWN_PANE_HEIGHT + (hasSplitPanes ? 2 * SPLIT_PANE_HEIGHT : 0)
+
   const colorOf = (name: string): string =>
     lines.find((l) => l.name === name)?.color ?? INK.light.untagged
 
@@ -355,7 +362,7 @@ export default function PnlCurve() {
 
     const chart: IChartApi = createChart(container, {
       width: container.clientWidth,
-      height: CHART_HEIGHT,
+      height: chartHeight,
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
         textColor: ink.text,
@@ -376,6 +383,10 @@ export default function PnlCurve() {
       localization: { priceFormatter: (price: number) => formatCurrencyRef.current(price) },
     })
 
+    // Pane order: combined and strategies, then Realized, then Unrealized (combined
+    // view only), then the drawdown.
+    const splitPane = (name: string) => (name === 'Realized' ? 1 : 2)
+    const drawdownPane = hasSplitPanes ? 3 : 1
     const drawn = new Map<ISeriesApi<'Line'>, { name: string; color: string }>()
     for (const line of lines) {
       if (hidden.has(line.name)) continue
@@ -388,7 +399,7 @@ export default function PnlCurve() {
           lastValueVisible: false,
           crosshairMarkerRadius: 4,
         },
-        0
+        (SPLIT_NAMES as readonly string[]).includes(line.name) ? splitPane(line.name) : 0
       )
       lineSeries.setData(series.dates.map((date, i) => ({ time: date, value: line.values[i] })))
       drawn.set(lineSeries, { name: line.name, color: line.color })
@@ -411,17 +422,19 @@ export default function PnlCurve() {
         priceLineVisible: false,
         lastValueVisible: false,
       },
-      1
+      drawdownPane
     )
     ddSeries.setData(
       series.dates.map((date, i) => ({ time: date, value: totalDrawdown.series[i] }))
     )
 
     const panes = chart.panes()
-    if (panes.length > 1) {
-      panes[0].setHeight(CURVE_PANE_HEIGHT)
-      panes[1].setHeight(DRAWDOWN_PANE_HEIGHT)
+    panes[0]?.setHeight(CURVE_PANE_HEIGHT)
+    if (hasSplitPanes) {
+      panes[1]?.setHeight(SPLIT_PANE_HEIGHT)
+      panes[2]?.setHeight(SPLIT_PANE_HEIGHT)
     }
+    panes[drawdownPane]?.setHeight(DRAWDOWN_PANE_HEIGHT)
     chart.timeScale().fitContent()
 
     chart.subscribeCrosshairMove((param) => {
@@ -820,7 +833,7 @@ export default function PnlCurve() {
               {view === 'chart' ? (
                 <>
                   <div className="relative">
-                    <div ref={containerRef} style={{ height: CHART_HEIGHT }} />
+                    <div ref={containerRef} style={{ height: chartHeight }} />
                     {tooltip && (
                       <div
                         className="pointer-events-none absolute z-10 rounded-md border bg-popover px-3 py-2 text-xs shadow-md"
@@ -856,7 +869,9 @@ export default function PnlCurve() {
                     )}
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Lower pane: drawdown of the total from its running high.
+                    {hasSplitPanes
+                      ? 'Panes: combined (total and strategies); realized so far; open (unrealized) at each close; drawdown of the combined curve from its running high.'
+                      : 'Lower pane: drawdown of the total from its running high.'}
                   </p>
                 </>
               ) : (

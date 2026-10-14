@@ -96,12 +96,32 @@ def _series(store: dict, name: str, n: int) -> list[float]:
     return store[name]
 
 
+def _drop_stale_shorts(shorts, before: date, key, notes) -> None:
+    """Remove shorts opened before `before`.
+
+    Cash equity cannot be carried short overnight, so a short that is still
+    open the day after it was opened is a sell whose buy is older than the
+    ledger. It is reported and dropped; keeping it would invent a position.
+    A sell that is covered by a buy the same day (an intraday short) is closed
+    by FIFO before this runs and is never touched.
+    """
+    kept = [lot for lot in shorts if lot["opened"] >= before]
+    if len(kept) == len(shorts):
+        return
+    for lot in shorts:
+        if lot["opened"] < before:
+            notes["orphan_sells"].append({"symbol": key[0], "date": lot["opened"].isoformat()})
+    shorts.clear()
+    shorts.extend(kept)
+
+
 def _apply_fill(fill, key, day_index, longs, shorts, realized, n, notes):
     action = (fill.get("action") or "").upper()
     qty = float(fill.get("quantity") or 0)
     price = float(fill.get("average_price") or 0)
     if qty <= 0 or action not in ("BUY", "SELL"):
         return
+    _drop_stale_shorts(shorts, _day(fill["timestamp"]), key, notes)
     name = _name(fill.get("strategy"))
     is_buy = action == "BUY"
     opposing = shorts if is_buy else longs
@@ -117,13 +137,6 @@ def _apply_fill(fill, key, day_index, longs, shorts, realized, n, notes):
         if lot["qty"] <= _EPS:
             opposing.popleft()
     if remaining <= _EPS:
-        return
-    if not is_buy and (fill.get("product") or "").upper() != "MIS":
-        # A carried sell with nothing to close: its buy is older than
-        # the ledger. Opening a short here would invent a position.
-        notes["orphan_sells"].append(
-            {"symbol": key[0], "date": _day(fill["timestamp"]).isoformat()}
-        )
         return
     (longs if is_buy else shorts).append(
         {
@@ -186,6 +199,8 @@ def build_curve(
             _apply_fill(key_fills[idx], key, None, longs, shorts, realized, n, notes)
             idx += 1
 
+        _drop_stale_shorts(shorts, first_day, key, notes)
+
         # Re-base the lots carried into the range.
         if basis == BASIS_RANGE_START:
             base_close = None
@@ -201,6 +216,7 @@ def build_curve(
             while idx < len(key_fills) and _day(key_fills[idx]["timestamp"]) <= day:
                 _apply_fill(key_fills[idx], key, day_index, longs, shorts, realized, n, notes)
                 idx += 1
+            _drop_stale_shorts(shorts, day + timedelta(days=1), key, notes)
             open_lots = [*longs, *shorts]
             if not open_lots:
                 continue
