@@ -27,6 +27,8 @@ fill. Other segments keep the realized-only lots; Unrealized and Combined are di
 
 **Basis, decided same day.** The page always uses actual cost (as Zerodha's report does), so month by month it ties to the broker. The "range_start" basis stays in the endpoint and `services/pnl_curve.py` (tested) but the page no longer offers it; the monthly table and every pane follow the strategy selection, so an excluded Untagged chip leaves its P&L out of the totals.
 
+**UI round, same day (after the first review on acc1).** P&L type is a dropdown; the default range is the last 30 days; the warnings (sells with no earlier buy, no daily price) are one toast per fetch instead of a standing list; Net P&L leads the headline numbers with Realized and Unrealized shown separately; the per-strategy table is merged into a collapsible Strategies card; Total, strategies, Realized and Unrealized are one plot with on-plot toggles (drawdown stays its own pane); the chart downloads as a PNG; Alt+R resets selection, line toggles and zoom.
+
 **Known limits.** No corporate-action adjustment (positions are exited before one today). A cash-equity sell with no
 earlier buy in the ledger is reported and left out, not turned into a short. A symbol with no daily close is held at cost and
 listed on the page. Trading days come from NIFTY's daily bars (weekdays when the broker returns none).
