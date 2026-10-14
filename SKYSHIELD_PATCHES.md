@@ -6,6 +6,22 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-14 - P&L Curve: strategy selection drives every pane
+
+**Files:** `frontend/src/pages/PnlCurve.tsx`, `frontend/src/lib/pnlCurve.test.ts`. **Upstream:** none (fork-only page).
+
+**Problem.** Clicking a name in the legend only hid its line. The total, the drawdown pane, the headline statistics and
+the three tables were always computed from every strategy, so a one-strategy view still showed all-strategy numbers.
+
+**Fix.** A Strategies card above the panes (one chip per strategy, plus All and None) sets the selection. The total,
+cumulative curve, drawdown, statistics and the monthly, day-wise and per-strategy tables are recomputed from the lots of
+the selected strategies only; an excluded strategy leaves the chart. Filtering is client-side on the closed lots, so
+FIFO matching is unchanged. The selection survives a refetch. The in-chart legend is gone (the card replaces it).
+
+**Verified on:** local (13 vitest cases incl. two for the selection). Browser check on acc1 after deploy.
+
+---
+
 ## 2026-10-14 - Tradebook: tag by order, and a Group by order view
 
 **Files:** `services/pnl_history_service.py` (`set_trade_strategy`), `frontend/src/lib/tradeGroups.ts` +

@@ -137,3 +137,25 @@ describe('strategySummaries', () => {
     expect(rows[1].maxDrawdown).toBe(-20)
   })
 })
+
+describe('a strategy selection', () => {
+  // The page recomputes everything from the lots of the selected strategies,
+  // so the total, drawdown and statistics are those of that subset alone.
+  const only = (name: string) => LOTS.filter((l) => (l.strategy || UNTAGGED) === name)
+
+  it('gives the total, drawdown and statistics of the selected strategy only', () => {
+    const series = dailySeries(only('A'))
+    expect(series.dates).toEqual(['2026-01-05', '2026-01-06', '2026-02-02'])
+    expect(series.total).toEqual([100, -150, 200])
+    expect(series.byStrategy.has('B')).toBe(false)
+
+    const cum = cumulative(series.total)
+    expect(cum).toEqual([100, -50, 150])
+    expect(drawdown(series.dates, cum).max.depth).toBe(-150)
+    expect(stats(series.dates, series.total).netPnl).toBe(150)
+  })
+
+  it('is empty when nothing is selected', () => {
+    expect(dailySeries([]).dates).toEqual([])
+  })
+})

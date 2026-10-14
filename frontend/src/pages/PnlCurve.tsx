@@ -93,7 +93,20 @@ const CHART_HEIGHT = 520
 const CURVE_PANE_HEIGHT = 400
 const DRAWDOWN_PANE_HEIGHT = CHART_HEIGHT - CURVE_PANE_HEIGHT
 
-const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTH_LABELS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+]
 
 interface TooltipState {
   left: number
@@ -166,7 +179,6 @@ export default function PnlCurve() {
             strategy: t.strategy,
           }))
         )
-        setHidden(new Set())
         setHasFetched(true)
       } else {
         showToast.error(response.message || 'Failed to load P&L history', 'system')
@@ -201,7 +213,16 @@ export default function PnlCurve() {
     }
   }, [lots])
 
-  const series = useMemo(() => dailySeries(folded.lots), [folded])
+  // Every strategy in the fetched range, regardless of the selection. Used for the
+  // strategy chips, so an excluded strategy keeps its name, colour and own total.
+  const allSeries = useMemo(() => dailySeries(folded.lots), [folded])
+  // The selection: a strategy in `hidden` is out of the total, the drawdown, the
+  // statistics and both tables, not just off the chart.
+  const activeLots = useMemo(
+    () => folded.lots.filter((lot) => !hidden.has(strategyOf(lot))),
+    [folded, hidden]
+  )
+  const series = useMemo(() => dailySeries(activeLots), [activeLots])
   const totalCum = useMemo(() => cumulative(series.total), [series])
   const totalDrawdown = useMemo(() => drawdown(series.dates, totalCum), [series, totalCum])
   const summary = useMemo(() => stats(series.dates, series.total), [series])
@@ -230,7 +251,37 @@ export default function PnlCurve() {
     return out
   }, [series, totalCum, folded.names, isDark])
 
-  const colorOf = (name: string): string => lines.find((l) => l.name === name)?.color ?? INK.light.untagged
+  // One chip per strategy in the fetched range, in the same order and colours as the
+  // lines. The Total chip is the total of the selection.
+  const chips = useMemo(() => {
+    const palette = isDark ? SERIES_COLORS.dark : SERIES_COLORS.light
+    const ink = isDark ? INK.dark : INK.light
+    const last = (daily: number[] | undefined) => {
+      if (!daily) return 0
+      const cum = cumulative(daily)
+      return cum.length ? cum[cum.length - 1] : 0
+    }
+    const out: { name: string; color: string; value: number }[] = [
+      { name: TOTAL, color: ink.total, value: last(series.total) },
+    ]
+    folded.names.forEach((name, i) => {
+      out.push({ name, color: palette[i], value: last(allSeries.byStrategy.get(name)) })
+    })
+    for (const [name, color] of [
+      [OTHER, ink.other],
+      [UNTAGGED, ink.untagged],
+    ] as const) {
+      if (allSeries.byStrategy.has(name)) {
+        out.push({ name, color, value: last(allSeries.byStrategy.get(name)) })
+      }
+    }
+    return out
+  }, [allSeries, series, folded.names, isDark])
+
+  const strategyNames = chips.filter((c) => c.name !== TOTAL).map((c) => c.name)
+
+  const colorOf = (name: string): string =>
+    lines.find((l) => l.name === name)?.color ?? INK.light.untagged
 
   // Draw. Rebuilt on every change of data, legend or theme: the data is a few
   // hundred daily points at most.
@@ -353,6 +404,10 @@ export default function PnlCurve() {
       return next
     })
 
+  const selectAllStrategies = () =>
+    setHidden((prev) => (prev.has(TOTAL) ? new Set([TOTAL]) : new Set()))
+  const clearAllStrategies = () => setHidden((prev) => new Set([...prev, ...strategyNames]))
+
   const pnlClass = (value: number) => (value >= 0 ? 'text-green-600' : 'text-red-600')
   const maxDd = totalDrawdown.max
   const monthMaxAbs = Math.max(
@@ -474,9 +529,67 @@ export default function PnlCurve() {
         </div>
       )}
 
-      {hasFetched && series.dates.length === 0 && (
+      {hasFetched && allSeries.dates.length === 0 && (
         <div className="text-center py-16 text-muted-foreground">
           No closed trades in this date range
+        </div>
+      )}
+
+      {hasFetched && allSeries.dates.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-base">Strategies</CardTitle>
+                <CardDescription>
+                  Click a name to include or exclude it. The chart, drawdown, statistics and tables
+                  all follow the selection.
+                </CardDescription>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={selectAllStrategies}>
+                  All
+                </Button>
+                <Button size="sm" variant="outline" onClick={clearAllStrategies}>
+                  None
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {chips.map((chip) => {
+                const off = hidden.has(chip.name)
+                return (
+                  <button
+                    key={chip.name}
+                    type="button"
+                    aria-pressed={!off}
+                    onClick={() => toggleSeries(chip.name)}
+                    className={cn(
+                      'flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition-opacity',
+                      off && 'opacity-40'
+                    )}
+                  >
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: chip.color }}
+                    />
+                    <span>{chip.name}</span>
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {formatCurrency(chip.value)}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {hasFetched && allSeries.dates.length > 0 && series.dates.length === 0 && (
+        <div className="text-center py-16 text-muted-foreground">
+          No strategy is selected. Pick at least one above.
         </div>
       )}
 
@@ -571,7 +684,7 @@ export default function PnlCurve() {
               <div>
                 <CardTitle>Cumulative P&L</CardTitle>
                 <CardDescription>
-                  Realized, by the day lots were closed. Click a name to show or hide a line.
+                  Realized, by the day lots were closed, for the selected strategies.
                 </CardDescription>
               </div>
               <fieldset className="m-0 flex min-w-0 gap-2 border-0 p-0" aria-label="Chart or table">
@@ -594,40 +707,16 @@ export default function PnlCurve() {
             <CardContent>
               {view === 'chart' ? (
                 <>
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    {lines.map((line) => {
-                      const off = hidden.has(line.name)
-                      const last = line.values[line.values.length - 1]
-                      return (
-                        <button
-                          key={line.name}
-                          type="button"
-                          aria-pressed={!off}
-                          onClick={() => toggleSeries(line.name)}
-                          className={cn(
-                            'flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition-opacity',
-                            off && 'opacity-40'
-                          )}
-                        >
-                          <span
-                            className="inline-block h-2.5 w-2.5 rounded-full"
-                            style={{ backgroundColor: line.color }}
-                          />
-                          <span>{line.name}</span>
-                          <span className="font-mono text-xs text-muted-foreground">
-                            {formatCurrency(last)}
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
                   <div className="relative">
                     <div ref={containerRef} style={{ height: CHART_HEIGHT }} />
                     {tooltip && (
                       <div
                         className="pointer-events-none absolute z-10 rounded-md border bg-popover px-3 py-2 text-xs shadow-md"
                         style={{
-                          left: Math.min(tooltip.left + 16, (containerRef.current?.clientWidth ?? 600) - 220),
+                          left: Math.min(
+                            tooltip.left + 16,
+                            (containerRef.current?.clientWidth ?? 600) - 220
+                          ),
                           top: Math.max(tooltip.top - 20, 0),
                           minWidth: 190,
                         }}
@@ -673,10 +762,14 @@ export default function PnlCurve() {
                       {series.dates.map((date, i) => (
                         <TableRow key={date}>
                           <TableCell>{date}</TableCell>
-                          <TableCell className={cn('text-right font-medium', pnlClass(series.total[i]))}>
+                          <TableCell
+                            className={cn('text-right font-medium', pnlClass(series.total[i]))}
+                          >
                             {formatCurrency(series.total[i])}
                           </TableCell>
-                          <TableCell className={cn('text-right font-medium', pnlClass(totalCum[i]))}>
+                          <TableCell
+                            className={cn('text-right font-medium', pnlClass(totalCum[i]))}
+                          >
                             {formatCurrency(totalCum[i])}
                           </TableCell>
                           <TableCell className="text-right text-muted-foreground">
@@ -727,7 +820,9 @@ export default function PnlCurve() {
                         <TableCell className={cn('text-right font-medium', pnlClass(row.netPnl))}>
                           {formatCurrency(row.netPnl)}
                         </TableCell>
-                        <TableCell className="text-right">{formatCurrency(row.maxDrawdown)}</TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(row.maxDrawdown)}
+                        </TableCell>
                         <TableCell className="text-right">{percent(row.winRate)}</TableCell>
                         <TableCell className="text-right">{ratio(row.profitFactor)}</TableCell>
                         <TableCell className="text-right">{row.activeDays}</TableCell>
