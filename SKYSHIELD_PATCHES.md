@@ -25,6 +25,8 @@ fill. Other segments keep the realized-only lots; Unrealized and Combined are di
 
 **Follow-up, same day.** First run on acc1 showed WOCKPHARMA with a phantom open lot (+20,232 on a position that was sold, +174,551 untagged): the ledger holds a 2021 SELL 340 then BUY 340 the same day (an intraday short, product unknown on imports). Dropping an unmatched sell left that buy open at the front of the FIFO queue, so the 2026 sells consumed it and the 2026 buys stayed open. An unmatched sell now opens a short that the same-day buy covers; a short still open after its day (cash equity cannot be carried short) is reported and dropped. The combined view also draws Realized and Unrealized in their own panes above the drawdown.
 
+**Basis, decided same day.** The page always uses actual cost (as Zerodha's report does), so month by month it ties to the broker. The "range_start" basis stays in the endpoint and `services/pnl_curve.py` (tested) but the page no longer offers it; the monthly table and every pane follow the strategy selection, so an excluded Untagged chip leaves its P&L out of the totals.
+
 **Known limits.** No corporate-action adjustment (positions are exited before one today). A cash-equity sell with no
 earlier buy in the ledger is reported and left out, not turned into a short. A symbol with no daily close is held at cost and
 listed on the page. Trading days come from NIFTY's daily bars (weekdays when the broker returns none).

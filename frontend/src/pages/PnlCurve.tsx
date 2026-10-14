@@ -155,7 +155,6 @@ export default function PnlCurve() {
   // keeps the realized-only lots.
   const [curveData, setCurveData] = useState<CurveData | null>(null)
   const [pnlType, setPnlType] = useState<CurveMode>('combined')
-  const [basis, setBasis] = useState<'range_start' | 'actual_cost'>('range_start')
   const [view, setView] = useState<'chart' | 'table'>('chart')
   // Series the user switched off in the legend. Colours follow the strategy,
   // so hiding one never repaints the rest.
@@ -179,7 +178,7 @@ export default function PnlCurve() {
     setIsLoading(true)
     try {
       if (segment === 'equity') {
-        const response = await tradingApi.getPnlCurve(apiKey, start, end, basis)
+        const response = await tradingApi.getPnlCurve(apiKey, start, end, 'actual_cost')
         if (seq !== loadSeq.current) return
         if (response.status === 'success' && response.data) {
           setCurveData(response.data)
@@ -542,22 +541,6 @@ export default function PnlCurve() {
                   )
                 })}
               </fieldset>
-              {segment === 'equity' && (
-                <div className="mt-2 flex items-center gap-2">
-                  <Label htmlFor="curve-basis" className="text-xs text-muted-foreground">
-                    Positions held before the start
-                  </Label>
-                  <Select value={basis} onValueChange={(v) => setBasis(v as typeof basis)}>
-                    <SelectTrigger id="curve-basis" className="h-8 w-44">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="range_start">Valued from range start</SelectItem>
-                      <SelectItem value="actual_cost">Actual cost</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
             </div>
             <div className="flex-1 space-y-1">
               <Label htmlFor="curve-start-date">Start date</Label>
