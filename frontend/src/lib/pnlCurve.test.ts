@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   type CurveLot,
-  UNTAGGED,
   cumulative,
+  curveSeries,
   dailySeries,
   drawdown,
+  foldCurveStrategies,
   monthly,
   stats,
   strategySummaries,
+  UNTAGGED,
 } from './pnlCurve'
 
 const lot = (date: string, pnl: number, strategy: string | null): CurveLot => ({
@@ -157,5 +159,48 @@ describe('a strategy selection', () => {
 
   it('is empty when nothing is selected', () => {
     expect(dailySeries([]).dates).toEqual([])
+  })
+})
+
+describe('equity curve (realized + unrealized)', () => {
+  // A: held 5th-6th (level 50, 150), sold on the 7th for 200 realized.
+  // B: untagged, 30 open throughout.
+  const byStrategy = {
+    A: { realized: [0, 0, 200, 0], unrealized: [50, 150, 0, 0] },
+    [UNTAGGED]: { realized: [0, 0, 0, 0], unrealized: [30, 30, 30, 30] },
+  }
+  const dates = ['2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08']
+  const { byName } = foldCurveStrategies(byStrategy, 8)
+
+  it('combined is realized plus the change in the open level', () => {
+    const s = curveSeries(dates, byName, 'combined')
+    // A: 50, +100, -150+200, 0. Untagged: 30, 0, 0, 0.
+    expect(s.byStrategy.get('A')).toEqual([50, 100, 50, 0])
+    expect(s.total).toEqual([80, 100, 50, 0])
+    // Cumulative: total value = realized so far + open level (30 stays open).
+    expect(cumulative(s.total)).toEqual([80, 180, 230, 230])
+  })
+
+  it('unrealized cumulates back to the level and realized to the running total', () => {
+    expect(cumulative(curveSeries(dates, byName, 'unrealized').total)).toEqual([80, 180, 30, 30])
+    expect(cumulative(curveSeries(dates, byName, 'realized').total)).toEqual([0, 0, 200, 200])
+  })
+
+  it('a selection drops the others from the total and from the series', () => {
+    const s = curveSeries(dates, byName, 'combined', (n) => n === 'A')
+    expect(Array.from(s.byStrategy.keys())).toEqual(['A'])
+    expect(s.total).toEqual([50, 100, 50, 0])
+    expect(drawdown(dates, cumulative(s.total)).max.depth).toBe(0)
+  })
+
+  it('folds strategies beyond the colour budget into Other', () => {
+    const many = {
+      A: { realized: [1, 0], unrealized: [0, 0] },
+      B: { realized: [2, 0], unrealized: [0, 0] },
+      C: { realized: [4, 0], unrealized: [0, 0] },
+    }
+    const folded = foldCurveStrategies(many, 2)
+    expect(folded.names).toEqual(['A', 'B'])
+    expect(folded.byName.get('Other')?.realized).toEqual([4, 0])
   })
 })

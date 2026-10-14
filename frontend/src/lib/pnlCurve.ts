@@ -277,3 +277,102 @@ export function strategySummaries(series: DailySeries): StrategySummary[] {
   }
   return rows.sort((a, b) => b.netPnl - a.netPnl)
 }
+
+// ---------------------------------------------------------------------------
+// Daily realized + unrealized curve (equity), from GET /api/v1/pnl/curve.
+// ---------------------------------------------------------------------------
+
+export type CurveMode = 'realized' | 'unrealized' | 'combined'
+
+export interface CurveStrategySeries {
+  /** Realized on each day (a daily amount). */
+  realized: number[]
+  /** Open lots valued at each day's close (a level). */
+  unrealized: number[]
+}
+
+export interface CurveNotes {
+  orphan_sells: { symbol: string; date: string }[]
+  missing_close: string[]
+  missing_base: string[]
+  calendar?: string
+}
+
+export interface CurveData {
+  dates: string[]
+  by_strategy: Record<string, CurveStrategySeries>
+  basis: string
+  base_date: string | null
+  notes: CurveNotes
+}
+
+export const OTHER_STRATEGY = 'Other'
+
+/**
+ * Keep the first `maxNames` strategies (sorted by name) and fold the rest into
+ * "Other"; "Untagged" stays its own series. Returns the kept names in colour
+ * order and every series by display name.
+ */
+export function foldCurveStrategies(
+  byStrategy: Record<string, CurveStrategySeries>,
+  maxNames: number
+): { names: string[]; byName: Map<string, CurveStrategySeries> } {
+  const all = Object.keys(byStrategy)
+    .filter((n) => n !== UNTAGGED)
+    .sort()
+  const kept = all.slice(0, maxNames)
+  const byName = new Map<string, CurveStrategySeries>()
+
+  const add = (name: string, series: CurveStrategySeries) => {
+    const existing = byName.get(name)
+    if (!existing) {
+      byName.set(name, { realized: [...series.realized], unrealized: [...series.unrealized] })
+      return
+    }
+    series.realized.forEach((v, i) => {
+      existing.realized[i] += v
+    })
+    series.unrealized.forEach((v, i) => {
+      existing.unrealized[i] += v
+    })
+  }
+
+  for (const name of all) add(kept.includes(name) ? name : OTHER_STRATEGY, byStrategy[name])
+  if (byStrategy[UNTAGGED]) add(UNTAGGED, byStrategy[UNTAGGED])
+  return { names: kept, byName }
+}
+
+/** One strategy's daily change for the chosen mode; cumulating it gives the curve. */
+function dailyChange(series: CurveStrategySeries, mode: CurveMode): number[] {
+  return series.realized.map((realized, i) => {
+    const level = series.unrealized[i]
+    const step = level - (i > 0 ? series.unrealized[i - 1] : 0)
+    if (mode === 'realized') return realized
+    if (mode === 'unrealized') return step
+    return realized + step
+  })
+}
+
+/**
+ * The page's DailySeries for a curve: total and per strategy as daily changes,
+ * so cumulative(), drawdown(), stats() and monthly() work on it unchanged.
+ * `include` picks the selected strategies; the total is theirs alone.
+ */
+export function curveSeries(
+  dates: string[],
+  byName: Map<string, CurveStrategySeries>,
+  mode: CurveMode,
+  include: (name: string) => boolean = () => true
+): DailySeries {
+  const total = dates.map(() => 0)
+  const byStrategy = new Map<string, number[]>()
+  for (const [name, series] of byName) {
+    if (!include(name)) continue
+    const change = dailyChange(series, mode)
+    byStrategy.set(name, change)
+    change.forEach((v, i) => {
+      total[i] += v
+    })
+  }
+  return { dates, total, byStrategy }
+}

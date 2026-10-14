@@ -42,10 +42,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
+  type CurveData,
   type CurveLot,
+  type CurveMode,
   cumulative,
+  curveSeries,
   dailySeries,
   drawdown,
+  foldCurveStrategies,
   monthly,
   stats,
   strategyOf,
@@ -145,6 +149,11 @@ export default function PnlCurve() {
   const [isLoading, setIsLoading] = useState(false)
   const [hasFetched, setHasFetched] = useState(false)
   const [lots, setLots] = useState<CurveLot[]>([])
+  // Equity uses the daily realized + unrealized curve; every other segment
+  // keeps the realized-only lots.
+  const [curveData, setCurveData] = useState<CurveData | null>(null)
+  const [pnlType, setPnlType] = useState<CurveMode>('combined')
+  const [basis, setBasis] = useState<'range_start' | 'actual_cost'>('range_start')
   const [view, setView] = useState<'chart' | 'table'>('chart')
   // Series the user switched off in the legend. Colours follow the strategy,
   // so hiding one never repaints the rest.
@@ -167,21 +176,34 @@ export default function PnlCurve() {
     const seq = ++loadSeq.current
     setIsLoading(true)
     try {
-      const response = await tradingApi.getPnlHistory(apiKey, start, end, {
-        segment: segment === 'all' ? undefined : segment,
-      })
-      if (seq !== loadSeq.current) return
-      if (response.status === 'success' && response.data) {
-        setLots(
-          response.data.closed_trades.map((t) => ({
-            exit_timestamp: t.exit_timestamp,
-            realized_pnl: t.realized_pnl,
-            strategy: t.strategy,
-          }))
-        )
-        setHasFetched(true)
+      if (segment === 'equity') {
+        const response = await tradingApi.getPnlCurve(apiKey, start, end, basis)
+        if (seq !== loadSeq.current) return
+        if (response.status === 'success' && response.data) {
+          setCurveData(response.data)
+          setLots([])
+          setHasFetched(true)
+        } else {
+          showToast.error(response.message || 'Failed to load the P&L curve', 'system')
+        }
       } else {
-        showToast.error(response.message || 'Failed to load P&L history', 'system')
+        const response = await tradingApi.getPnlHistory(apiKey, start, end, {
+          segment: segment === 'all' ? undefined : segment,
+        })
+        if (seq !== loadSeq.current) return
+        if (response.status === 'success' && response.data) {
+          setCurveData(null)
+          setLots(
+            response.data.closed_trades.map((t) => ({
+              exit_timestamp: t.exit_timestamp,
+              realized_pnl: t.realized_pnl,
+              strategy: t.strategy,
+            }))
+          )
+          setHasFetched(true)
+        } else {
+          showToast.error(response.message || 'Failed to load P&L history', 'system')
+        }
       }
     } catch {
       if (seq === loadSeq.current) showToast.error('Failed to load P&L history', 'system')
@@ -215,14 +237,46 @@ export default function PnlCurve() {
 
   // Every strategy in the fetched range, regardless of the selection. Used for the
   // strategy chips, so an excluded strategy keeps its name, colour and own total.
-  const allSeries = useMemo(() => dailySeries(folded.lots), [folded])
+  const curveFolded = useMemo(
+    () => (curveData ? foldCurveStrategies(curveData.by_strategy, MAX_STRATEGY_SERIES) : null),
+    [curveData]
+  )
+  // Strategy names in colour order, from whichever source is on screen.
+  const orderedNames = curveFolded ? curveFolded.names : folded.names
+  const curveMode: CurveMode = curveData ? pnlType : 'realized'
+  const allSeries = useMemo(
+    () =>
+      curveData && curveFolded
+        ? curveSeries(curveData.dates, curveFolded.byName, curveMode)
+        : dailySeries(folded.lots),
+    [curveData, curveFolded, curveMode, folded]
+  )
   // The selection: a strategy in `hidden` is out of the total, the drawdown, the
   // statistics and both tables, not just off the chart.
   const activeLots = useMemo(
     () => folded.lots.filter((lot) => !hidden.has(strategyOf(lot))),
     [folded, hidden]
   )
-  const series = useMemo(() => dailySeries(activeLots), [activeLots])
+  const series = useMemo(
+    () =>
+      curveData && curveFolded
+        ? curveSeries(curveData.dates, curveFolded.byName, curveMode, (n) => !hidden.has(n))
+        : dailySeries(activeLots),
+    [curveData, curveFolded, curveMode, hidden, activeLots]
+  )
+  // Realized and unrealized of the selection, drawn beside Combined.
+  const splitLines = useMemo(() => {
+    if (!curveData || !curveFolded || curveMode !== 'combined') return null
+    const include = (n: string) => !hidden.has(n)
+    return {
+      realized: cumulative(
+        curveSeries(curveData.dates, curveFolded.byName, 'realized', include).total
+      ),
+      unrealized: cumulative(
+        curveSeries(curveData.dates, curveFolded.byName, 'unrealized', include).total
+      ),
+    }
+  }, [curveData, curveFolded, curveMode, hidden])
   const totalCum = useMemo(() => cumulative(series.total), [series])
   const totalDrawdown = useMemo(() => drawdown(series.dates, totalCum), [series, totalCum])
   const summary = useMemo(() => stats(series.dates, series.total), [series])
@@ -237,7 +291,7 @@ export default function PnlCurve() {
     const out: { name: string; color: string; width: number; values: number[] }[] = [
       { name: TOTAL, color: ink.total, width: 3, values: totalCum },
     ]
-    folded.names.forEach((name, i) => {
+    orderedNames.forEach((name, i) => {
       const daily = series.byStrategy.get(name)
       if (daily) out.push({ name, color: palette[i], width: 2, values: cumulative(daily) })
     })
@@ -248,8 +302,12 @@ export default function PnlCurve() {
       const daily = series.byStrategy.get(name)
       if (daily) out.push({ name, color, width: 2, values: cumulative(daily) })
     }
+    if (splitLines) {
+      out.push({ name: 'Realized', color: '#16a34a', width: 1, values: splitLines.realized })
+      out.push({ name: 'Unrealized', color: '#d97706', width: 1, values: splitLines.unrealized })
+    }
     return out
-  }, [series, totalCum, folded.names, isDark])
+  }, [series, totalCum, orderedNames, isDark, splitLines])
 
   // One chip per strategy in the fetched range, in the same order and colours as the
   // lines. The Total chip is the total of the selection.
@@ -264,7 +322,7 @@ export default function PnlCurve() {
     const out: { name: string; color: string; value: number }[] = [
       { name: TOTAL, color: ink.total, value: last(series.total) },
     ]
-    folded.names.forEach((name, i) => {
+    orderedNames.forEach((name, i) => {
       out.push({ name, color: palette[i], value: last(allSeries.byStrategy.get(name)) })
     })
     for (const [name, color] of [
@@ -276,7 +334,7 @@ export default function PnlCurve() {
       }
     }
     return out
-  }, [allSeries, series, folded.names, isDark])
+  }, [allSeries, series, orderedNames, isDark])
 
   const strategyNames = chips.filter((c) => c.name !== TOTAL).map((c) => c.name)
 
@@ -446,28 +504,47 @@ export default function PnlCurve() {
             <div className="flex-1 space-y-1">
               <Label>P&L</Label>
               <fieldset className="m-0 flex min-w-0 gap-2 border-0 p-0" aria-label="P&L basis">
-                <Button type="button" size="sm" variant="default">
-                  Realized
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled
-                  title="Needs a daily price for every open position - not built yet"
-                >
-                  Unrealized
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled
-                  title="Needs a daily price for every open position - not built yet"
-                >
-                  Combined
-                </Button>
+                {(['realized', 'unrealized', 'combined'] as const).map((type) => {
+                  const needsEquity = type !== 'realized'
+                  const blocked = needsEquity && segment !== 'equity'
+                  const active = (segment === 'equity' ? pnlType : 'realized') === type
+                  return (
+                    <Button
+                      key={type}
+                      type="button"
+                      size="sm"
+                      variant={active ? 'default' : 'outline'}
+                      disabled={blocked}
+                      title={
+                        blocked ? 'Unrealized and Combined are for the Equity segment' : undefined
+                      }
+                      onClick={() => setPnlType(type)}
+                    >
+                      {type === 'realized'
+                        ? 'Realized'
+                        : type === 'unrealized'
+                          ? 'Unrealized'
+                          : 'Combined'}
+                    </Button>
+                  )
+                })}
               </fieldset>
+              {segment === 'equity' && (
+                <div className="mt-2 flex items-center gap-2">
+                  <Label htmlFor="curve-basis" className="text-xs text-muted-foreground">
+                    Positions held before the start
+                  </Label>
+                  <Select value={basis} onValueChange={(v) => setBasis(v as typeof basis)}>
+                    <SelectTrigger id="curve-basis" className="h-8 w-44">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="range_start">Valued from range start</SelectItem>
+                      <SelectItem value="actual_cost">Actual cost</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
             <div className="flex-1 space-y-1">
               <Label htmlFor="curve-start-date">Start date</Label>
@@ -516,9 +593,38 @@ export default function PnlCurve() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground mt-3">
-            Realized only for now. Unrealized and Combined need a daily price for every open
-            position and come next.
+            Equity: realized is booked on the day a lot is sold; unrealized is the open lots at each
+            day's close. Other segments show realized only. Corporate actions are not adjusted for.
           </p>
+          {curveData &&
+            (curveData.notes.orphan_sells.length > 0 ||
+              curveData.notes.missing_close.length > 0 ||
+              curveData.notes.missing_base.length > 0 ||
+              curveData.notes.calendar) && (
+              <ul className="mt-2 list-disc pl-5 text-xs text-amber-600">
+                {curveData.notes.orphan_sells.length > 0 && (
+                  <li>
+                    {curveData.notes.orphan_sells.length} sell(s) have no earlier buy in the ledger
+                    and are left out:{' '}
+                    {Array.from(new Set(curveData.notes.orphan_sells.map((o) => o.symbol))).join(
+                      ', '
+                    )}
+                  </li>
+                )}
+                {curveData.notes.missing_close.length > 0 && (
+                  <li>
+                    No daily price for: {curveData.notes.missing_close.join(', ')} (held at cost)
+                  </li>
+                )}
+                {curveData.notes.missing_base.length > 0 && (
+                  <li>
+                    No close before the range for: {curveData.notes.missing_base.join(', ')} (actual
+                    cost used)
+                  </li>
+                )}
+                {curveData.notes.calendar && <li>Trading days: {curveData.notes.calendar}</li>}
+              </ul>
+            )}
         </CardContent>
       </Card>
 
@@ -615,7 +721,13 @@ export default function PnlCurve() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardDescription>Net realized P&L</CardDescription>
+                <CardDescription>
+                  {curveMode === 'realized'
+                    ? 'Net realized P&L'
+                    : curveMode === 'unrealized'
+                      ? 'Open P&L at the end'
+                      : 'Net P&L (realized + unrealized)'}
+                </CardDescription>
                 <CardTitle className={cn('text-2xl', pnlClass(summary.netPnl))}>
                   {formatCurrency(summary.netPnl)}
                 </CardTitle>

@@ -29,6 +29,7 @@ from marshmallow import ValidationError
 
 from limiter import limiter
 from services.pnl_history_service import (
+    get_pnl_curve,
     get_pnl_history,
     get_pnl_trades,
     get_strategy_attribution,
@@ -42,6 +43,7 @@ from utils.logging import get_logger
 
 from .pnl_history_schema import (
     PnlAttributionSchema,
+    PnlCurveSchema,
     PnlHistorySchema,
     PnlImportSchema,
     PnlSetTradeStrategySchema,
@@ -58,6 +60,7 @@ api = Namespace("pnl_history", description="Consolidated multi-day P&L (fork-onl
 logger = get_logger(__name__)
 
 pnl_history_schema = PnlHistorySchema()
+pnl_curve_schema = PnlCurveSchema()
 pnl_import_schema = PnlImportSchema()
 pnl_strategy_legs_schema = PnlStrategyLegsSchema()
 pnl_attribution_schema = PnlAttributionSchema()
@@ -188,6 +191,29 @@ class PnlHistory(Resource):
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
             logger.exception(f"Unexpected error in pnl/history endpoint: {e}")
+            return make_response(
+                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
+            )
+
+
+@api.route("/curve", strict_slashes=False)
+class PnlCurve(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    def get(self):
+        """Daily realized and unrealized P&L per strategy (equity only)."""
+        try:
+            params = pnl_curve_schema.load(request.args.to_dict())
+            success, response_data, status_code = get_pnl_curve(
+                api_key=params["apikey"],
+                start_date=params["start_date"],
+                end_date=params["end_date"],
+                basis=params["basis"],
+            )
+            return make_response(jsonify(response_data), status_code)
+        except ValidationError as err:
+            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
+        except Exception as e:
+            logger.exception(f"Unexpected error in pnl/curve endpoint: {e}")
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )

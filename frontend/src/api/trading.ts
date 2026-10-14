@@ -1,3 +1,4 @@
+import type { CurveData } from '@/lib/pnlCurve'
 import type {
   ApiResponse,
   GttOrder,
@@ -352,6 +353,24 @@ export const tradingApi = {
         strategy: options?.strategy || undefined,
       },
     })
+    return response.data
+  },
+
+  /**
+   * Daily realized and unrealized P&L per strategy for equity (fork-only, see
+   * SKYSHIELD_PATCHES.md). basis "range_start" values lots carried into the
+   * range from the close before it; "actual_cost" uses the fill price.
+   */
+  getPnlCurve: async (
+    apiKey: string,
+    startDate: string,
+    endDate: string,
+    basis: 'range_start' | 'actual_cost' = 'range_start'
+  ): Promise<ApiResponse<CurveData & { segment: string }>> => {
+    const response = await apiClient.get<ApiResponse<CurveData & { segment: string }>>(
+      '/pnl/curve',
+      { params: { apikey: apiKey, start_date: startDate, end_date: endDate, basis } }
+    )
     return response.data
   },
 

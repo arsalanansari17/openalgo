@@ -6,6 +6,31 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-14 - P&L Curve: daily realized + unrealized curve for equity
+
+**Files:** `services/pnl_curve.py` (new, pure), `services/pnl_history_service.py` (`get_pnl_curve`, daily-close cache),
+`restx_api/pnl_history.py` (`GET /api/v1/pnl/curve`), `restx_api/pnl_history_schema.py`, `frontend/src/lib/pnlCurve.ts`
+(+ test), `frontend/src/api/trading.ts`, `frontend/src/pages/PnlCurve.tsx`, `test/test_pnl_curve.py`,
+`test/test_pnl_curve_service.py` (new). **Upstream:** none (fork-only page and endpoint).
+
+**Problem.** The curve was realized-only: a lot appeared on the day it was sold, so a position carried through a
+drawdown showed nothing until it closed, and a lot bought before the range dragged its whole earlier gain into the
+window.
+
+**Fix.** Equity only. The ledger's fills are replayed by FIFO per day. Realized is booked on the day a lot is closed;
+unrealized is the open lots at each day's close (broker daily history). Combined is their sum. Basis "range_start"
+(default) values a lot carried into the range from the close before it, so a window holds only what was earned in it
+and adjacent ranges add up; "actual_cost" uses the fill price, as the broker's report does. Strategy follows the entry
+fill. Other segments keep the realized-only lots; Unrealized and Combined are disabled there.
+
+**Known limits.** No corporate-action adjustment (positions are exited before one today). A CNC sell with no earlier
+buy in the ledger is reported and left out, not turned into a short. A symbol with no daily close is held at cost and
+listed on the page. Trading days come from NIFTY's daily bars (weekdays when the broker returns none).
+
+**Verified on:** local only (12 + 4 backend tests, 13 frontend cases). Check on acc1 against a known range after deploy.
+
+---
+
 ## 2026-10-14 - P&L Curve: strategy selection drives every pane
 
 **Files:** `frontend/src/pages/PnlCurve.tsx`, `frontend/src/lib/pnlCurve.test.ts`. **Upstream:** none (fork-only page).

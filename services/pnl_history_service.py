@@ -11,7 +11,7 @@ explicit design call - "this is how zerodha or broker would be doing" -
 extended from one trading day to an arbitrary date range.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_
@@ -28,9 +28,11 @@ from database.pnl_db import (
     parse_trade_timestamp,
 )
 from database.strategy_book_db import StrategyBookUnavailable, get_order_tag
+from services.pnl_curve import VALID_BASES, build_curve, symbols_needing_closes
 from utils.kotak_statement import normalize_company_name, normalize_statement_row
 from utils.logging import get_logger
 from utils.pnl_fifo import compute_realized_pnl, summarize_by_day
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -878,3 +880,151 @@ def set_trade_strategy(api_key: str, trade_id: int, strategy: str):
         return False, {"status": "error", "message": str(e)}, 500
     finally:
         db_session.remove()
+
+
+# ---------------------------------------------------------------------------
+# P&L curve: daily realized + unrealized per strategy (equity only)
+# ---------------------------------------------------------------------------
+
+# Daily closes per instrument and span, as {date: close}. Past closes never
+# change; a short TTL keeps today's bar fresh.
+_daily_close_cache = LockedTTLCache(maxsize=512, ttl=900)
+
+_INDEX_FOR_CALENDAR = ("NIFTY", "NSE_INDEX")
+
+
+def _bars_to_closes(records) -> dict[date, float]:
+    """{trading date: close} from a broker daily history response.
+
+    A daily bar's epoch is midnight IST written either as 00:00 UTC of that
+    date or as 18:30 UTC of the day before; adding 5h30m lands on the right
+    date for both.
+    """
+    out: dict[date, float] = {}
+    for rec in records or []:
+        try:
+            ts = int(rec["timestamp"])
+            close = float(rec["close"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[datetime.fromtimestamp(ts + 19800, tz=UTC).date()] = close
+    return out
+
+
+def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: date):
+    """Daily closes for one instrument over [start, end], or {} when the broker
+    has none. Cached by span, so a re-fetch of the same page costs no broker
+    calls.
+    """
+    from services.history_service import get_history
+
+    key = (symbol, exchange, start.isoformat(), end.isoformat())
+    cached = _daily_close_cache.get(key)
+    if cached is not None:
+        return cached
+    try:
+        ok, response, _ = get_history(
+            symbol=symbol,
+            exchange=exchange,
+            interval="D",
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+            api_key=api_key,
+        )
+    except Exception:
+        logger.exception(f"Daily history failed for {exchange}:{symbol}")
+        return {}
+    closes = _bars_to_closes(response.get("data")) if ok else {}
+    if closes:
+        _daily_close_cache[key] = closes
+    return closes
+
+
+def get_pnl_curve(api_key: str, start_date: str, end_date: str, basis: str = "range_start"):
+    """Daily realized and unrealized P&L per strategy, equity segment only.
+
+    Returns {dates, by_strategy: {name: {realized: [...], unrealized: [...]}},
+    basis, base_date, notes}. realized is a daily amount; unrealized is the
+    level of the open lots at that day's close. Everything is derived from the
+    ledger and the broker's daily closes on every call; nothing is stored.
+    """
+    auth_token, broker = get_auth_token_broker(api_key)
+    if not auth_token:
+        return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+    if basis not in VALID_BASES:
+        return False, {"status": "error", "message": f"basis must be one of {VALID_BASES}"}, 400
+
+    error, query, start_dt, end_dt = _parse_range_and_build_query(
+        start_date, end_date, segment="equity", fifo_lookback=True
+    )
+    if error:
+        return error
+    start, end = start_dt.date(), end_dt.date()
+    if end < start:
+        return False, {"status": "error", "message": "end_date is before start_date"}, 400
+
+    try:
+        rows = query.order_by(PnlTrade.trade_timestamp.asc(), PnlTrade.id.asc()).all()
+        fills = [
+            {
+                "symbol": r.symbol,
+                "exchange": r.exchange,
+                "product": r.product,
+                "action": r.action,
+                "quantity": r.quantity,
+                "average_price": r.average_price,
+                "timestamp": r.trade_timestamp,
+                "strategy": r.strategy,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error reading fills for the P&L curve: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
+    finally:
+        db_session.remove()
+
+    # Trading days: the index's own daily bars (holidays and special sessions
+    # come for free); weekdays when the broker returns none.
+    lookback_start = start - timedelta(days=10)
+    index_closes = _daily_closes(api_key, *_INDEX_FOR_CALENDAR, lookback_start, end)
+    calendar_note = None
+    if index_closes:
+        all_days = sorted(index_closes)
+    else:
+        calendar_note = "weekdays (no index history from the broker)"
+        span = (end - lookback_start).days + 1
+        all_days = [
+            d
+            for d in (lookback_start + timedelta(days=i) for i in range(span))
+            if d.weekday() < 5
+        ]
+    trading_dates = [d for d in all_days if start <= d <= end]
+    prior = [d for d in all_days if d < start]
+    base_date = prior[-1] if prior else None
+
+    closes = {}
+    if trading_dates:
+        span_start = base_date or start
+        for symbol, exchange in sorted(symbols_needing_closes(fills, span_start, end)):
+            got = _daily_closes(api_key, symbol, exchange, span_start, end)
+            if got:
+                closes[(symbol, exchange)] = got
+
+    result = build_curve(fills, closes, trading_dates, base_date, basis)
+    if calendar_note:
+        result["notes"]["calendar"] = calendar_note
+    return (
+        True,
+        {
+            "status": "success",
+            "data": {
+                "basis": basis,
+                "segment": "equity",
+                "base_date": base_date.isoformat() if base_date else None,
+                **result,
+            },
+        },
+        200,
+    )

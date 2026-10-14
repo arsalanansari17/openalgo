@@ -34,6 +34,20 @@ class PnlHistorySchema(Schema):
     strategy = fields.Str(required=False, load_default=None)
 
 
+class PnlCurveSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    start_date = fields.Str(required=True, validate=validate.Length(equal=10))
+    end_date = fields.Str(required=True, validate=validate.Length(equal=10))
+    # range_start: lots carried into the range are valued from the close before
+    # it, so a window holds only what was earned in it. actual_cost: the fill
+    # price, as the broker's own report does.
+    basis = fields.Str(
+        required=False,
+        load_default="range_start",
+        validate=validate.OneOf(["range_start", "actual_cost"]),
+    )
+
+
 class PnlImportSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     # The uploaded file itself arrives as multipart/form-data, not JSON, so
