@@ -18,6 +18,7 @@ never `origin` (upstream). Rollback branch on the fork: `upgrade-main-2026-09-27
   finished. Next action: list what is missing with the user (compare with AlgoMirror's `pnl_curve.html`, which has the
   stat block and share caption), then build it. Fork-only subsystem, so fix/extend directly and log in
   `SKYSHIELD_PATCHES.md`.
+- [ ] **Tradebook: tag by order + Group by order, committed and pushed, not deployed** (2026-10-14, user request). Tagging one fill now tags every fill of the order; the Tradebook has a Group by order switch; `upgrade/backfill_pnl_order_tags.py` completes part-tagged orders. See SKYSHIELD_PATCHES.md 2026-10-14. Next action: after 15:40 IST on a non-trading window, rebuild `frontend/dist` (not rebuilt in the commit), deploy to acc1, acc2, acc3, then per VM run the backfill script without `--apply`, read the report, then with `--apply`.
 - [ ] **GitHub Actions create no runs on the fork** (2026-10-10). Pushes to `fork/main` and the probe PR started no
   workflow runs, so CI (and the `commit-dist` bot that rebuilds `frontend/dist`) is not running; fork `main` carries a
   locally built dist meanwhile. Next action (user): check the fork's Actions tab (workflows enabled?), Settings ->

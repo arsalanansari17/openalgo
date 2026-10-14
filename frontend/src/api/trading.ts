@@ -431,11 +431,10 @@ export const tradingApi = {
     apiKey: string,
     tradeId: number,
     strategy: string
-  ): Promise<ApiResponse<{ id: number; strategy: string }>> => {
-    const response = await apiClient.patch<ApiResponse<{ id: number; strategy: string }>>(
-      `/pnl/trades/${tradeId}/strategy`,
-      { apikey: apiKey, strategy }
-    )
+  ): Promise<ApiResponse<{ id: number; strategy: string; updated_ids?: number[] }>> => {
+    const response = await apiClient.patch<
+      ApiResponse<{ id: number; strategy: string; updated_ids?: number[] }>
+    >(`/pnl/trades/${tradeId}/strategy`, { apikey: apiKey, strategy })
     return response.data
   },
 

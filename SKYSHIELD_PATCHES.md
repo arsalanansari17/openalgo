@@ -6,6 +6,31 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-14 - Tradebook: tag by order, and a Group by order view
+
+**Files:** `services/pnl_history_service.py` (`set_trade_strategy`), `frontend/src/lib/tradeGroups.ts` +
+`tradeGroups.test.ts` (new), `frontend/src/pages/TradeBook.tsx`, `frontend/src/api/trading.ts`,
+`test/test_pnl_tag_by_order.py` (new), `upgrade/backfill_pnl_order_tags.py` (new, not in `MIGRATIONS`).
+**Upstream:** none. P&L History and the per-fill tag are fork-only subsystems, so this is fixed here directly.
+
+**Problem.** One order is filled by the exchange in many pieces and the broker returns each as its own trade, so
+`tradebook_fills` holds one row per piece (a CYIENT buy on 2026-09-30 is 17 rows under one order id). The strategy tag
+was set one row at a time, so tagging an order meant clicking every fill, and an order could end up part tagged
+(ENGINERSIN 2026-09-01: three fills tagged, one not).
+
+**Fix.** `PATCH /api/v1/pnl/trades/<id>/strategy` now sets the tag on every fill with the same order id and symbol and
+returns them in `data.updated_ids`; a row with no order id still tags only itself. The Tradebook page has a Group by
+order switch (off by default, so the table still matches the broker's own): one row per order with summed quantity,
+weighted average price and the tag, expandable to the fills; the tag edit on a grouped row covers the whole order.
+`upgrade/backfill_pnl_order_tags.py` copies an order's tag onto its untagged fills (report only without `--apply`;
+`--apply` backs up `tradebook.db` into `db/backups/` first; an order carrying two different strategies is listed and
+left alone). It is a data repair, so it is run by hand, never by an update.
+
+**Verified on:** local only (3 backend tests, 7 frontend tests, the script against a scratch database). Not deployed.
+After deploy, run the script without `--apply` on each VM and read the report before applying.
+
+---
+
 ## 2026-10-09 - Positions page: real entry average for carried Kotak legs
 
 **Files:** `frontend/src/lib/trading/strategyAttribution.ts` (`applyCostBasis`, `hasCarryForwardValuation`),

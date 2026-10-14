@@ -2,6 +2,8 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronDown,
+  ChevronRight,
   Download,
   Loader2,
   RefreshCw,
@@ -35,6 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -45,6 +48,7 @@ import {
 } from '@/components/ui/table'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { groupTradesByOrder, ungrouped } from '@/lib/tradeGroups'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -232,6 +236,10 @@ export default function TradeBook() {
   const [editingTradeId, setEditingTradeId] = useState<number | null>(null)
   const [editingValue, setEditingValue] = useState('')
   const [isSavingTag, setIsSavingTag] = useState(false)
+  // Fold the fills of one order into a single row (fork-only). Off by
+  // default so the table matches the broker's own tradebook until asked.
+  const [groupByOrder, setGroupByOrder] = useState(false)
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
   const [startDate, setStartDate] = useState(sevenDaysAgoStr())
   const [endDate, setEndDate] = useState(todayStr())
   const isHistorical = startDate !== todayStr() || endDate !== todayStr()
@@ -277,6 +285,23 @@ export default function TradeBook() {
       return 0
     })
   }, [trades, filters, segment, strategyFilters, symbolFilter, sortConfig])
+
+  const displayGroups = useMemo(
+    () =>
+      groupByOrder
+        ? groupTradesByOrder(sortedAndFilteredTrades)
+        : ungrouped(sortedAndFilteredTrades),
+    [groupByOrder, sortedAndFilteredTrades]
+  )
+
+  const toggleOrderExpanded = (key: string) => {
+    setExpandedOrders((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   // Heat map data, grouping the already-filtered trades by day. Scoped to
   // whatever Segment/Symbol/date range is currently applied, same as
@@ -540,8 +565,14 @@ export default function TradeBook() {
     try {
       const response = await tradingApi.setTradeStrategy(apiKey, trade.id, value)
       if (response.status === 'success' && response.data) {
+        // The tag is set on every fill of the order, so mirror that here.
+        const updated = new Set(response.data.updated_ids ?? [trade.id])
         setTrades((prev) =>
-          prev.map((t) => (t.id === trade.id ? { ...t, strategy: response.data?.strategy } : t))
+          prev.map((t) =>
+            t.id !== undefined && updated.has(t.id)
+              ? { ...t, strategy: response.data?.strategy }
+              : t
+          )
         )
         setEditingTradeId(null)
         showToast.success(`Tagged as ${response.data.strategy}`, 'clipboard')
@@ -608,9 +639,9 @@ export default function TradeBook() {
               <DialogHeader>
                 <DialogTitle>Import P&L History</DialogTitle>
                 <DialogDescription>
-                  Upload exported tradebook CSVs (e.g. separate equity and F&O exports) to
-                  backfill historical P&L for dates before automated capture started. Trades
-                  already recorded are skipped automatically.
+                  Upload exported tradebook CSVs (e.g. separate equity and F&O exports) to backfill
+                  historical P&L for dates before automated capture started. Trades already recorded
+                  are skipped automatically.
                 </DialogDescription>
               </DialogHeader>
               <div className="py-2 space-y-3">
@@ -793,9 +824,23 @@ export default function TradeBook() {
           so they sit directly above the table, top right. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          {sortedAndFilteredTrades.length} trade{sortedAndFilteredTrades.length === 1 ? '' : 's'}
+          {groupByOrder
+            ? `${displayGroups.length} order${displayGroups.length === 1 ? '' : 's'} (${sortedAndFilteredTrades.length} fills)`
+            : `${sortedAndFilteredTrades.length} trade${sortedAndFilteredTrades.length === 1 ? '' : 's'}`}
         </p>
         <div className="flex items-center gap-2">
+          <Label
+            htmlFor="group-by-order"
+            className="flex items-center gap-2 text-sm font-normal cursor-pointer"
+          >
+            <Switch
+              id="group-by-order"
+              checked={groupByOrder}
+              onCheckedChange={setGroupByOrder}
+              aria-label="Group fills by order"
+            />
+            Group by order
+          </Label>
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
               <Button
@@ -958,10 +1003,7 @@ export default function TradeBook() {
             </Badge>
           ))}
           {symbolFilter.trim() !== '' && (
-            <Badge
-              variant="secondary"
-              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
-            >
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
               {symbolFilter.trim().toUpperCase()}
             </Badge>
           )}
@@ -1078,96 +1120,160 @@ export default function TradeBook() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedAndFilteredTrades.map((trade, index) => (
-                    <TableRow key={`${trade.orderid}-${index}`}>
-                      <TableCell className="font-medium">{trade.symbol}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{trade.exchange}</Badge>
-                      </TableCell>
-                      {!isCrypto && (
+                  {displayGroups.flatMap((group) => {
+                    const trade = group.trade
+                    const isGroup = group.fills.length > 1
+                    const isExpanded = isGroup && expandedOrders.has(group.key)
+                    const rows = [
+                      <TableRow key={group.key}>
+                        <TableCell className="font-medium">{trade.symbol}</TableCell>
                         <TableCell>
-                          <Badge variant="secondary">{trade.product}</Badge>
+                          <Badge variant="outline">{trade.exchange}</Badge>
                         </TableCell>
-                      )}
-                      <TableCell>
-                        <Badge
-                          variant={trade.action === 'BUY' ? 'default' : 'destructive'}
-                          className={cn('gap-1', trade.action === 'BUY' ? 'bg-green-500' : '')}
-                        >
-                          {trade.action === 'BUY' ? (
-                            <TrendingUp className="h-3 w-3" />
-                          ) : (
-                            <TrendingDown className="h-3 w-3" />
-                          )}
-                          {trade.action}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">{trade.quantity}</TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatCurrency(trade.average_price)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatCurrency(trade.trade_value)}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
-                      <TableCell className="font-mono text-xs">{trade.tradeid || '-'}</TableCell>
-                      {isHistorical && (
+                        {!isCrypto && (
+                          <TableCell>
+                            <Badge variant="secondary">{trade.product}</Badge>
+                          </TableCell>
+                        )}
                         <TableCell>
-                          {editingTradeId === trade.id ? (
-                            <div className="flex items-center gap-1">
-                              <Input
-                                autoFocus
-                                value={editingValue}
-                                onChange={(e) => setEditingValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') saveTradeStrategy(trade)
-                                  if (e.key === 'Escape') setEditingTradeId(null)
-                                }}
-                                className="h-7 w-32 text-xs"
-                                placeholder="Strategy name"
-                              />
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 w-7 p-0"
-                                disabled={isSavingTag}
-                                onClick={() => saveTradeStrategy(trade)}
-                                aria-label="Save strategy tag"
-                              >
-                                <Check className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 w-7 p-0"
-                                onClick={() => setEditingTradeId(null)}
-                                aria-label="Cancel"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          ) : (
+                          <Badge
+                            variant={trade.action === 'BUY' ? 'default' : 'destructive'}
+                            className={cn('gap-1', trade.action === 'BUY' ? 'bg-green-500' : '')}
+                          >
+                            {trade.action === 'BUY' ? (
+                              <TrendingUp className="h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="h-3 w-3" />
+                            )}
+                            {trade.action}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-mono">{trade.quantity}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {formatCurrency(trade.average_price)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {formatCurrency(trade.trade_value)}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {isGroup ? (
                             <button
                               type="button"
-                              className="text-xs text-left hover:underline"
-                              onClick={() => {
-                                setEditingTradeId(trade.id ?? null)
-                                setEditingValue(trade.strategy || '')
-                              }}
-                              aria-label={trade.strategy ? `Edit strategy tag` : 'Add strategy tag'}
+                              className="flex items-center gap-1 hover:underline"
+                              onClick={() => toggleOrderExpanded(group.key)}
+                              aria-label={isExpanded ? 'Hide fills' : 'Show fills'}
                             >
-                              {trade.strategy || (
-                                <span className="text-muted-foreground">+ Tag</span>
+                              {isExpanded ? (
+                                <ChevronDown className="h-3 w-3" />
+                              ) : (
+                                <ChevronRight className="h-3 w-3" />
                               )}
+                              {group.fills.length} fills
                             </button>
+                          ) : (
+                            trade.tradeid || '-'
                           )}
                         </TableCell>
-                      )}
-                      <TableCell className="text-sm text-muted-foreground">
-                        {formatDateTime(trade.timestamp)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        {isHistorical && (
+                          <TableCell>
+                            {editingTradeId === trade.id ? (
+                              <div className="flex items-center gap-1">
+                                <Input
+                                  autoFocus
+                                  value={editingValue}
+                                  onChange={(e) => setEditingValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') saveTradeStrategy(trade)
+                                    if (e.key === 'Escape') setEditingTradeId(null)
+                                  }}
+                                  className="h-7 w-32 text-xs"
+                                  placeholder="Strategy name"
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 w-7 p-0"
+                                  disabled={isSavingTag}
+                                  onClick={() => saveTradeStrategy(trade)}
+                                  aria-label="Save strategy tag"
+                                >
+                                  <Check className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 w-7 p-0"
+                                  onClick={() => setEditingTradeId(null)}
+                                  aria-label="Cancel"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-xs text-left hover:underline"
+                                onClick={() => {
+                                  setEditingTradeId(trade.id ?? null)
+                                  setEditingValue(trade.strategy || '')
+                                }}
+                                aria-label={
+                                  trade.strategy ? `Edit strategy tag` : 'Add strategy tag'
+                                }
+                              >
+                                {trade.strategy ? (
+                                  <>
+                                    {trade.strategy}
+                                    {group.partiallyTagged && (
+                                      <span className="text-muted-foreground"> (some fills)</span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-muted-foreground">+ Tag</span>
+                                )}
+                              </button>
+                            )}
+                          </TableCell>
+                        )}
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatDateTime(trade.timestamp)}
+                        </TableCell>
+                      </TableRow>,
+                    ]
+                    if (isExpanded) {
+                      group.fills.forEach((fill, fillIndex) => {
+                        rows.push(
+                          <TableRow
+                            key={`${group.key}-fill-${fill.tradeid ?? fill.id ?? fillIndex}`}
+                            className="bg-muted/30 text-muted-foreground"
+                          >
+                            <TableCell colSpan={isCrypto ? 3 : 4} className="text-xs pl-8">
+                              fill {fillIndex + 1}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">
+                              {fill.quantity}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">
+                              {formatCurrency(fill.average_price)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">
+                              {formatCurrency(fill.trade_value)}
+                            </TableCell>
+                            <TableCell />
+                            <TableCell className="font-mono text-xs">
+                              {fill.tradeid || '-'}
+                            </TableCell>
+                            {isHistorical && <TableCell />}
+                            <TableCell className="text-xs">
+                              {formatDateTime(fill.timestamp)}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
+                    }
+                    return rows
+                  })}
                 </TableBody>
               </Table>
             </div>

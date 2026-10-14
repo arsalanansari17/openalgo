@@ -824,7 +824,8 @@ def set_trade_strategy(api_key: str, trade_id: int, strategy: str):
     CSV-imported history and any trade with no orderid to automatically
     join against the strategy book (see PnlTrade.strategy's docstring).
     Overwrites whatever strategy value (if any) the row already has,
-    automatic or manual.
+    automatic or manual, and does the same for every other fill of the same
+    order and symbol (the reply lists them in `updated_ids`).
     """
     auth_token, broker = get_auth_token_broker(api_key)
     if not auth_token:
@@ -840,8 +841,37 @@ def set_trade_strategy(api_key: str, trade_id: int, strategy: str):
             return False, {"status": "error", "message": "Trade not found"}, 404
 
         row.strategy = strategy
+        # One order is filled in many pieces, each its own row with its own
+        # trade id. The tag belongs to the order, so it goes onto every fill
+        # of the same order and symbol in one step. Rows with no order id
+        # (some CSV imports) have nothing to group on and stay single.
+        sibling_ids = []
+        if row.orderid:
+            siblings = (
+                db_session.query(PnlTrade)
+                .filter(
+                    PnlTrade.orderid == row.orderid,
+                    PnlTrade.symbol == row.symbol,
+                    PnlTrade.id != row.id,
+                )
+                .all()
+            )
+            for sibling in siblings:
+                sibling.strategy = strategy
+                sibling_ids.append(sibling.id)
         db_session.commit()
-        return True, {"status": "success", "data": {"id": row.id, "strategy": row.strategy}}, 200
+        return (
+            True,
+            {
+                "status": "success",
+                "data": {
+                    "id": row.id,
+                    "strategy": row.strategy,
+                    "updated_ids": [row.id, *sibling_ids],
+                },
+            },
+            200,
+        )
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Error setting strategy tag on trade {trade_id}: {e}")
