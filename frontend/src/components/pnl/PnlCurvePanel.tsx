@@ -26,7 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { cumulative, drawdown, UNTAGGED } from '@/lib/pnlCurve'
+import { cumulative, drawdown, runningMaxDrawdown, UNTAGGED } from '@/lib/pnlCurve'
 import type { PnlModel } from '@/lib/pnlModel'
 import { INK, REALIZED_COLOR, strategyColor, UNREALIZED_COLOR } from '@/lib/pnlPalette'
 import { cn } from '@/lib/utils'
@@ -73,6 +73,7 @@ export function PnlCurvePanel({
     date: string
     rows: { name: string; color: string; value: number }[]
     drawdown: number | null
+    maxDrawdown: number | null
   } | null>(null)
 
   const containerRef = useRef<HTMLDivElement>(null)
@@ -83,6 +84,7 @@ export function PnlCurvePanel({
   const { series } = model
   const totalCum = useMemo(() => cumulative(series.total), [series])
   const dd = useMemo(() => drawdown(series.dates, totalCum), [series, totalCum])
+  const mddSoFar = useMemo(() => runningMaxDrawdown(dd.series), [dd])
   const ink = isDark ? INK.dark : INK.light
 
   const lines = useMemo<LineDef[]>(() => {
@@ -177,6 +179,20 @@ export function PnlCurvePanel({
       1
     )
     ddSeries.setData(series.dates.map((date, i) => ({ time: date, value: dd.series[i] })))
+    // The deepest drawdown so far, dashed, in the same pane.
+    const mddSeries = chart.addSeries(
+      LineSeries,
+      {
+        color: isDark ? 'rgba(230, 103, 103, 0.9)' : 'rgba(227, 73, 72, 0.9)',
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      },
+      1
+    )
+    mddSeries.setData(series.dates.map((date, i) => ({ time: date, value: mddSoFar[i] })))
 
     const panes = chart.panes()
     panes[0]?.setHeight(CURVE_PANE_HEIGHT)
@@ -195,12 +211,14 @@ export function PnlCurvePanel({
         if (point && typeof point.value === 'number') rows.push({ ...meta, value: point.value })
       }
       const d = param.seriesData.get(ddSeries) as { value?: number } | undefined
+      const m = param.seriesData.get(mddSeries) as { value?: number } | undefined
       setTooltip({
         left: param.point.x,
         top: param.point.y,
         date: String(param.time),
         rows,
         drawdown: d && typeof d.value === 'number' ? d.value : null,
+        maxDrawdown: m && typeof m.value === 'number' ? m.value : null,
       })
     })
 
@@ -212,7 +230,7 @@ export function PnlCurvePanel({
       chartRef.current = null
       setTooltip(null)
     }
-  }, [open, view, lines, hiddenLines, isDark, dd, series.dates])
+  }, [open, view, lines, hiddenLines, isDark, dd, mddSoFar, series.dates])
 
   const toggleLine = (name: string) =>
     setHiddenLines((prev) => {
@@ -383,15 +401,22 @@ export function PnlCurvePanel({
                     ))}
                     {tooltip.drawdown !== null && (
                       <div className="mt-1 flex justify-between gap-4 border-t pt-1 text-muted-foreground">
-                        <span>Drawdown</span>
+                        <span>Current drawdown</span>
                         <span className="font-mono">{formatCurrency(tooltip.drawdown)}</span>
+                      </div>
+                    )}
+                    {tooltip.maxDrawdown !== null && (
+                      <div className="flex justify-between gap-4 text-muted-foreground">
+                        <span>Max drawdown so far</span>
+                        <span className="font-mono">{formatCurrency(tooltip.maxDrawdown)}</span>
                       </div>
                     )}
                   </div>
                 )}
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Lower pane: drawdown of the total from its running high.
+                Lower pane: current drawdown from the running high (grey), and the deepest drawdown
+                so far (dashed).
               </p>
             </>
           ) : (

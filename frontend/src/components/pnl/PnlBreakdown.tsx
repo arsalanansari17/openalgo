@@ -5,8 +5,8 @@
  * daily series, so they follow the P&L type, the filters and the strategy
  * selection like everything else on the page.
  */
-import { Download } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { Download, ImageDown } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -18,6 +18,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { exportElementAsPng } from '@/lib/exportPng'
 import { type Bucket, type BucketUnit, bucketize } from '@/lib/pnlBuckets'
 import { monthly } from '@/lib/pnlCurve'
 import type { PnlModel } from '@/lib/pnlModel'
@@ -85,6 +86,7 @@ export function PnlBreakdown({
 }: Props) {
   const [view, setView] = useState<ViewKey>('day')
   const [mode, setMode] = useState<'chart' | 'table'>('chart')
+  const chartAreaRef = useRef<HTMLDivElement>(null)
   const showRealized = pnlType !== 'unrealized'
   const showUnrealized = pnlType !== 'realized'
 
@@ -147,6 +149,17 @@ export function PnlBreakdown({
     realized: r.realized,
     unrealized: r.unrealized,
   }))
+
+  const exportImage = async () => {
+    const element = chartAreaRef.current
+    if (!element) return
+    try {
+      await exportElementAsPng(element, `pnl_${view}_${startDate}_${endDate}.png`)
+      showToast.success('Chart saved', 'system')
+    } catch {
+      showToast.error('Could not save the chart image', 'system')
+    }
+  }
 
   const exportCsv = () => {
     let headers: string[]
@@ -241,10 +254,22 @@ export function PnlBreakdown({
           >
             Table
           </Button>
-          <Button size="sm" variant="outline" onClick={exportCsv} aria-label="Export CSV">
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
+          {mode === 'chart' ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={exportImage}
+              aria-label="Download the chart as an image"
+            >
+              <ImageDown className="mr-2 h-4 w-4" />
+              Image
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={exportCsv} aria-label="Export CSV">
+              <Download className="mr-2 h-4 w-4" />
+              CSV
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -254,13 +279,18 @@ export function PnlBreakdown({
               No matching trades in this date range
             </p>
           ) : mode === 'chart' ? (
-            <PnlScripBars
-              rows={scripBars}
-              isDark={isDark}
-              formatCurrency={formatCurrency}
-              showRealized={showRealized}
-              showUnrealized={showUnrealized}
-            />
+            <div ref={chartAreaRef}>
+              <p className="mb-2 text-sm font-medium">
+                Scrip-wise P&L, {startDate} to {endDate}
+              </p>
+              <PnlScripBars
+                rows={scripBars}
+                isDark={isDark}
+                formatCurrency={formatCurrency}
+                showRealized={showRealized}
+                showUnrealized={showUnrealized}
+              />
+            </div>
           ) : (
             <div className="max-h-[560px] overflow-auto">
               <Table>
@@ -326,7 +356,13 @@ export function PnlBreakdown({
         ) : buckets.length === 0 ? (
           <p className="py-8 text-center text-muted-foreground">Nothing in this date range</p>
         ) : mode === 'chart' ? (
-          <PnlBarChart buckets={buckets} isDark={isDark} formatCurrency={formatCurrency} />
+          <div ref={chartAreaRef}>
+            <p className="mb-2 text-sm font-medium">
+              {view === 'day' ? 'Daily' : view === 'week' ? 'Weekly' : 'Monthly'} P&L, {startDate}{' '}
+              to {endDate}
+            </p>
+            <PnlBarChart buckets={buckets} isDark={isDark} formatCurrency={formatCurrency} />
+          </div>
         ) : view === 'month' ? (
           <div className="overflow-x-auto">
             <Table>

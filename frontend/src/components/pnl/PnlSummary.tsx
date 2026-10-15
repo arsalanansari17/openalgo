@@ -6,7 +6,7 @@
  */
 import { useMemo } from 'react'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { cumulative, drawdown, stats } from '@/lib/pnlCurve'
+import { cumulative, currentDrawdown, drawdown, stats } from '@/lib/pnlCurve'
 import type { PnlModel } from '@/lib/pnlModel'
 import { cn } from '@/lib/utils'
 
@@ -30,6 +30,7 @@ export function PnlSummary({ model, formatCurrency, pnlType }: Props) {
   const { series } = model
   const summary = useMemo(() => stats(series.dates, series.total), [series])
   const maxDd = useMemo(() => drawdown(series.dates, cumulative(series.total)).max, [series])
+  const nowDd = useMemo(() => currentDrawdown(series.dates, cumulative(series.total)), [series])
 
   // The headline follows the chosen P&L type: realized booked, the open level,
   // or both. Without an equity curve the open level is the broker's live figure.
@@ -49,7 +50,7 @@ export function PnlSummary({ model, formatCurrency, pnlType }: Props) {
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>{netLabel}</CardDescription>
@@ -86,6 +87,21 @@ export function PnlSummary({ model, formatCurrency, pnlType }: Props) {
                       : `not recovered (${maxDd.days} days so far)`
                   }`
                 : 'The curve never fell below a previous high'}
+            </p>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Current drawdown</CardDescription>
+            <CardTitle className={cn('text-3xl', nowDd.atHigh ? 'text-green-600' : 'text-red-600')}>
+              {formatCurrency(nowDd.depth)}
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              {nowDd.atHigh
+                ? 'At a new high'
+                : `Below the ${formatCurrency(nowDd.peakValue)} peak${
+                    nowDd.peakDate ? ` of ${nowDd.peakDate}` : ''
+                  }, ${nowDd.daysSincePeak} day${nowDd.daysSincePeak === 1 ? '' : 's'} ago`}
             </p>
           </CardHeader>
         </Card>

@@ -147,6 +147,52 @@ export function drawdown(dates: string[], cum: number[]): DrawdownResult {
   }
 }
 
+export interface CurrentDrawdown {
+  /** Zero or negative: how far below the running peak the curve is on its last date. */
+  depth: number
+  /** The running peak and the date it was set; null while the peak is still the start (zero). */
+  peakValue: number
+  peakDate: string | null
+  /** Calendar days from the peak to the last date; 0 at a new high. */
+  daysSincePeak: number
+  atHigh: boolean
+}
+
+/** Where the curve stands now against its own running peak. */
+export function currentDrawdown(dates: string[], cum: number[]): CurrentDrawdown {
+  let peak = 0
+  let peakDate: string | null = null
+  cum.forEach((value, i) => {
+    if (value > peak) {
+      peak = value
+      peakDate = dates[i]
+    }
+  })
+  if (cum.length === 0) {
+    return { depth: 0, peakValue: 0, peakDate: null, daysSincePeak: 0, atHigh: true }
+  }
+  const last = cum[cum.length - 1]
+  const depth = last - peak
+  const lastDate = dates[dates.length - 1]
+  const from = peakDate ?? dates[0]
+  return {
+    depth,
+    peakValue: peak,
+    peakDate,
+    daysSincePeak: depth < 0 ? dayDiff(from, lastDate) : 0,
+    atHigh: depth >= 0,
+  }
+}
+
+/** The deepest drawdown seen so far on each date (a running minimum, never rises). */
+export function runningMaxDrawdown(series: number[]): number[] {
+  let worst = 0
+  return series.map((value) => {
+    if (value < worst) worst = value
+    return worst
+  })
+}
+
 export interface DayExtreme {
   date: string
   value: number

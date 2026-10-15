@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   type CurveLot,
   cumulative,
+  currentDrawdown,
   curveSeries,
   dailySeries,
   drawdown,
   foldCurveStrategies,
   monthly,
+  runningMaxDrawdown,
   stats,
   strategySummaries,
   UNTAGGED,
@@ -202,5 +204,31 @@ describe('equity curve (realized + unrealized)', () => {
     const folded = foldCurveStrategies(many, 2)
     expect(folded.names).toEqual(['A', 'B'])
     expect(folded.byName.get('Other')?.realized).toEqual([4, 0])
+  })
+})
+
+describe('current and running drawdown', () => {
+  const dates = ['2026-05-04', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08']
+
+  it('reports how far below the running peak the curve is on the last date', () => {
+    const cum = [100, 160, 90, 60, 120]
+    const now = currentDrawdown(dates, cum)
+    expect(now.depth).toBe(-40)
+    expect(now.peakValue).toBe(160)
+    expect(now.peakDate).toBe('2026-05-05')
+    expect(now.daysSincePeak).toBe(3)
+    expect(now.atHigh).toBe(false)
+  })
+
+  it('is flat at a new high', () => {
+    const now = currentDrawdown(dates, [10, 20, 15, 25, 30])
+    expect(now.depth).toBe(0)
+    expect(now.atHigh).toBe(true)
+    expect(now.daysSincePeak).toBe(0)
+  })
+
+  it('the running maximum drawdown only ever deepens', () => {
+    const series = drawdown(dates, [100, 160, 90, 60, 120]).series
+    expect(runningMaxDrawdown(series)).toEqual([0, 0, -70, -100, -100])
   })
 })
