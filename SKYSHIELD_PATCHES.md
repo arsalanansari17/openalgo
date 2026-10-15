@@ -6,6 +6,33 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-15 - P&L Analysis rebuilt as one page: summary, curve, strategies, calendar, breakdown
+
+**Files:** `frontend/src/pages/PnlAnalysis.tsx` (rewritten), `frontend/src/components/pnl/*` (new: PnlSummary,
+PnlCurvePanel, PnlStrategiesPanel, PnlCalendarPanel, PnlBreakdown, PnlBarChart, PnlScripBars),
+`frontend/src/hooks/usePnlAnalysisData.ts`, `frontend/src/lib/pnlModel.ts`, `pnlBuckets.ts`, `pnlPalette.ts` (+ tests).
+**Upstream:** none (fork-only page). The old `/pnl-history` and `/pnl-curve` pages are untouched and still work.
+
+**Why.** The first version only put two pages under tabs, so the headline cards and strategies were stuck inside
+the Curve tab, and the strategy chips and the Filters dialog were two separate switches (Untagged was missing from
+the dialog, and the Strategies pane kept showing a strategy that had been filtered out).
+
+**What.** `/pnl` is one page, one fetch (`/pnl/history` for every segment, plus `/pnl/curve` for Equity) and one
+model (`buildPnlModel`): Filters (with applied tags), Summary (Net P&L split into realized and unrealized, max
+drawdown, win days, profit factor, average win/loss, best/worst), Curve (cumulative lines with on-plot toggles,
+drawdown pane, PNG, Alt+R), Strategies (chips and table, collapsible), Calendar (heat map, collapsible) and a
+Breakdown with Day / Week / Month / Scrip views, each as bars or as a table with CSV export. The Strategies chips and
+the Filters dialog's strategy list are one state (an inclusion list; empty means all); Untagged is a strategy
+option. Equity unrealized is the open level at each day's close (Console's rule); other segments keep the broker's
+live figure for the headline.
+
+**Known limits.** Exchange and product narrow the Scrip view only for Equity (NSE and BSE are one position). The
+Scrip bars use the broker's live unrealized per symbol. Not yet browser-checked.
+
+**Verified on:** type check, lint, 44 frontend tests (model, buckets, filters hook, a render test of the page).
+
+---
+
 ## 2026-10-15 - P&L Analysis: the report and the curve under one filter bar
 
 **Files:** `frontend/src/pages/PnlAnalysis.tsx` (new), `frontend/src/hooks/usePnlFilters.ts` (+ test),
