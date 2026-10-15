@@ -6,6 +6,7 @@
  * The old /pnl-history and /pnl-curve pages stay available side by side.
  */
 import { PnlFilterBar } from '@/components/reports/PnlFilterBar'
+import { PnlTableFiltersDialog } from '@/components/reports/PnlTableFiltersDialog'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { type PnlTab, usePnlFilters } from '@/hooks/usePnlFilters'
 import PnlCurve from '@/pages/PnlCurve'
@@ -25,6 +26,15 @@ export default function PnlAnalysis() {
       </div>
 
       <PnlFilterBar filters={filters} />
+
+      {/* Above the tabs: narrows both Report and Curve. */}
+      <div className="flex justify-end">
+        <PnlTableFiltersDialog
+          value={filters.tableFilters}
+          onChange={filters.setTableFilters}
+          options={filters.options}
+        />
+      </div>
 
       <Tabs value={filters.tab} onValueChange={(v) => filters.setTab(v as PnlTab)}>
         <TabsList>

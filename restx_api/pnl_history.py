@@ -208,6 +208,7 @@ class PnlCurve(Resource):
                 start_date=params["start_date"],
                 end_date=params["end_date"],
                 basis=params["basis"],
+                symbol_contains=params.get("symbol_contains"),
             )
             return make_response(jsonify(response_data), status_code)
         except ValidationError as err:

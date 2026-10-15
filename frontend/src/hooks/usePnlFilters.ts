@@ -13,6 +13,28 @@ export type PnlSegmentChoice = '' | 'all' | Segment
 export type PnlTypeChoice = '' | 'realized' | 'unrealized' | 'combined'
 export type PnlTab = 'report' | 'curve'
 
+/** The Filters dialog: narrows both tabs. Empty means no narrowing. */
+export interface PnlTableFilters {
+  symbol: string
+  strategies: string[]
+  exchanges: string[]
+  products: string[]
+}
+
+export const EMPTY_TABLE_FILTERS: PnlTableFilters = {
+  symbol: '',
+  strategies: [],
+  exchanges: [],
+  products: [],
+}
+
+/** Values the tabs report back for the dialog's chips. */
+export interface PnlOptions {
+  strategies: string[]
+  exchanges: string[]
+  products: string[]
+}
+
 /** What an embedded tab gets: always complete, plus a counter that bumps on Fetch. */
 export interface PnlEmbeddedFilters {
   segment: 'all' | Segment
@@ -20,6 +42,13 @@ export interface PnlEmbeddedFilters {
   startDate: string
   endDate: string
   fetchToken: number
+  tableFilters: PnlTableFilters
+  onOptions: (options: Partial<PnlOptions>) => void
+}
+
+function union(a: string[], b: string[] | undefined): string[] {
+  if (!b || b.every((v) => a.includes(v))) return a
+  return Array.from(new Set([...a, ...b])).sort()
 }
 
 const SEGMENTS: PnlSegmentChoice[] = [
@@ -40,6 +69,26 @@ export function usePnlFilters() {
   const [params, setParams] = useSearchParams()
   const [fetchToken, setFetchToken] = useState(0)
   const [activePreset, setActivePreset] = useState<string | null>(null)
+  const [tableFilters, setTableFilters] = useState<PnlTableFilters>(EMPTY_TABLE_FILTERS)
+  const [options, setOptions] = useState<PnlOptions>({
+    strategies: [],
+    exchanges: [],
+    products: [],
+  })
+  const onOptions = useCallback((incoming: Partial<PnlOptions>) => {
+    setOptions((prev) => {
+      const next = {
+        strategies: union(prev.strategies, incoming.strategies),
+        exchanges: union(prev.exchanges, incoming.exchanges),
+        products: union(prev.products, incoming.products),
+      }
+      const same =
+        next.strategies === prev.strategies &&
+        next.exchanges === prev.exchanges &&
+        next.products === prev.products
+      return same ? prev : next
+    })
+  }, [])
 
   const today = isoDate(new Date())
   const thirtyAgo = (() => {
@@ -86,9 +135,11 @@ export function usePnlFilters() {
             startDate,
             endDate,
             fetchToken,
+            tableFilters,
+            onOptions,
           }
         : null,
-    [ready, segment, pnlType, startDate, endDate, fetchToken]
+    [ready, segment, pnlType, startDate, endDate, fetchToken, tableFilters, onOptions]
   )
 
   return {
@@ -101,6 +152,9 @@ export function usePnlFilters() {
     embedded,
     activePreset,
     today,
+    tableFilters,
+    setTableFilters,
+    options,
     setSegment: (value: PnlSegmentChoice) => update({ segment: value }),
     setPnlType: (value: PnlTypeChoice) => update({ type: value }),
     setStartDate: (value: string) => {

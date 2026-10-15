@@ -940,7 +940,13 @@ def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: da
     return closes
 
 
-def get_pnl_curve(api_key: str, start_date: str, end_date: str, basis: str = "range_start"):
+def get_pnl_curve(
+    api_key: str,
+    start_date: str,
+    end_date: str,
+    basis: str = "range_start",
+    symbol_contains: str | None = None,
+):
     """Daily realized and unrealized P&L per strategy, equity segment only.
 
     Returns {dates, by_strategy: {name: {realized: [...], unrealized: [...]}},
@@ -984,6 +990,11 @@ def get_pnl_curve(api_key: str, start_date: str, end_date: str, basis: str = "ra
         return False, {"status": "error", "message": str(e)}, 500
     finally:
         db_session.remove()
+
+    # A symbol filter is safe before matching: a position is one symbol.
+    needle = (symbol_contains or "").strip().upper()
+    if needle:
+        fills = [f for f in fills if needle in (f["symbol"] or "").upper()]
 
     # Trading days: the index's own daily bars (holidays and special sessions
     # come for free); weekdays when the broker returns none.

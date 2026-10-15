@@ -207,7 +207,13 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
     setIsLoading(true)
     try {
       if (segment === 'equity') {
-        const response = await tradingApi.getPnlCurve(apiKey, start, end, 'actual_cost')
+        const response = await tradingApi.getPnlCurve(
+          apiKey,
+          start,
+          end,
+          'actual_cost',
+          embedded?.tableFilters.symbol.trim() || undefined
+        )
         if (seq !== loadSeq.current) return
         if (response.status === 'success' && response.data) {
           setCurveData(response.data)
@@ -228,6 +234,9 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
             response.data.closed_trades.map((t) => ({
               exit_timestamp: t.exit_timestamp,
               realized_pnl: t.realized_pnl,
+              symbol: t.symbol,
+              exchange: t.exchange,
+              product: t.product,
               strategy: t.strategy,
             }))
           )
@@ -250,6 +259,15 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
     if (embedded && embedded.fetchToken > 0) fetchCurve()
   }, [embedded?.fetchToken])
 
+  // Equity curve: the symbol filter is applied on the server, so a change re-fetches.
+  const symbolNeedle = embedded?.tableFilters.symbol.trim() ?? ''
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a symbol change should re-fetch
+  useEffect(() => {
+    if (!embedded || embedded.fetchToken === 0 || segment !== 'equity') return
+    const timer = window.setTimeout(() => fetchCurve(), 400)
+    return () => window.clearTimeout(timer)
+  }, [symbolNeedle])
+
   const handleDatePresetSelect = (start: string, end: string, key: string) => {
     setStartDate(start)
     setEndDate(end)
@@ -257,21 +275,37 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
     fetchCurve(start, end)
   }
 
+  // The page-level Filters dialog narrows the realized-only lots here; the
+  // equity curve gets the symbol on the server and the strategies below.
+  const tableFilters = embedded?.tableFilters
+  const visibleLots = useMemo(() => {
+    if (!tableFilters) return lots
+    const needle = tableFilters.symbol.trim().toUpperCase()
+    return lots.filter((lot) => {
+      if (needle && !(lot.symbol ?? '').toUpperCase().includes(needle)) return false
+      if (tableFilters.exchanges.length > 0 && !tableFilters.exchanges.includes(lot.exchange ?? ''))
+        return false
+      if (tableFilters.products.length > 0 && !tableFilters.products.includes(lot.product ?? ''))
+        return false
+      return true
+    })
+  }, [lots, tableFilters])
+
   // Strategy names in colour order: sorted by name, the first eight keep a
   // colour and the rest fold into "Other". Untagged is its own neutral line.
   const folded = useMemo(() => {
-    const names = Array.from(new Set(lots.map(strategyOf)))
+    const names = Array.from(new Set(visibleLots.map(strategyOf)))
       .filter((n) => n !== UNTAGGED)
       .sort()
     const kept = new Set(names.slice(0, MAX_STRATEGY_SERIES))
     return {
       names: names.slice(0, MAX_STRATEGY_SERIES),
-      lots: lots.map((lot) => {
+      lots: visibleLots.map((lot) => {
         const name = strategyOf(lot)
         return name === UNTAGGED || kept.has(name) ? lot : { ...lot, strategy: OTHER }
       }),
     }
-  }, [lots])
+  }, [visibleLots])
 
   // Every strategy in the fetched range, regardless of the selection. Used for the
   // strategy chips, so an excluded strategy keeps its name, colour and own total.
@@ -289,23 +323,39 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
         : dailySeries(folded.lots),
     [curveData, curveFolded, curveMode, folded]
   )
+  // A strategy is out when its chip is off or the Filters dialog's strategy list
+  // is set and does not name it.
+  const effectiveHidden = useMemo(() => {
+    const out = new Set(hidden)
+    if (tableFilters && tableFilters.strategies.length > 0) {
+      for (const name of allSeries.byStrategy.keys()) {
+        if (!tableFilters.strategies.includes(name)) out.add(name)
+      }
+    }
+    return out
+  }, [hidden, tableFilters, allSeries])
   // The selection: a strategy in `hidden` is out of the total, the drawdown, the
   // statistics and both tables, not just off the chart.
   const activeLots = useMemo(
-    () => folded.lots.filter((lot) => !hidden.has(strategyOf(lot))),
-    [folded, hidden]
+    () => folded.lots.filter((lot) => !effectiveHidden.has(strategyOf(lot))),
+    [folded, effectiveHidden]
   )
   const series = useMemo(
     () =>
       curveData && curveFolded
-        ? curveSeries(curveData.dates, curveFolded.byName, curveMode, (n) => !hidden.has(n))
+        ? curveSeries(
+            curveData.dates,
+            curveFolded.byName,
+            curveMode,
+            (n) => !effectiveHidden.has(n)
+          )
         : dailySeries(activeLots),
-    [curveData, curveFolded, curveMode, hidden, activeLots]
+    [curveData, curveFolded, curveMode, effectiveHidden, activeLots]
   )
   // Realized and unrealized of the selection, drawn beside Combined.
   const splitLines = useMemo(() => {
     if (!curveData || !curveFolded || curveMode !== 'combined') return null
-    const include = (n: string) => !hidden.has(n)
+    const include = (n: string) => !effectiveHidden.has(n)
     return {
       realized: cumulative(
         curveSeries(curveData.dates, curveFolded.byName, 'realized', include).total
@@ -314,7 +364,7 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
         curveSeries(curveData.dates, curveFolded.byName, 'unrealized', include).total
       ),
     }
-  }, [curveData, curveFolded, curveMode, hidden])
+  }, [curveData, curveFolded, curveMode, effectiveHidden])
   const totalCum = useMemo(() => cumulative(series.total), [series])
   const totalDrawdown = useMemo(() => drawdown(series.dates, totalCum), [series, totalCum])
   const summary = useMemo(() => stats(series.dates, series.total), [series])
@@ -373,6 +423,12 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
   }, [allSeries, orderedNames, isDark])
 
   const strategyNames = chips.filter((c) => c.name !== TOTAL).map((c) => c.name)
+
+  // Report the strategy names to the page-level Filters dialog.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only the name list matters
+  useEffect(() => {
+    if (strategyNames.length > 0) embedded?.onOptions({ strategies: strategyNames })
+  }, [strategyNames.join('|')])
 
   const chartHeight = CHART_HEIGHT
 
@@ -580,7 +636,7 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
   // the P&L type shown.
   const splitTotals = useMemo(() => {
     if (!curveData || !curveFolded) return null
-    const include = (n: string) => !hidden.has(n)
+    const include = (n: string) => !effectiveHidden.has(n)
     const realizedTotal = curveSeries(
       curveData.dates,
       curveFolded.byName,
@@ -591,7 +647,7 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
       curveSeries(curveData.dates, curveFolded.byName, 'unrealized', include).total
     )
     return { realized: realizedTotal, unrealized: level.length ? level[level.length - 1] : 0 }
-  }, [curveData, curveFolded, hidden])
+  }, [curveData, curveFolded, effectiveHidden])
 
   const pnlClass = (value: number) => (value >= 0 ? 'text-green-600' : 'text-red-600')
   const maxDd = totalDrawdown.max
@@ -756,7 +812,7 @@ export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters }
             <CardContent className="space-y-4">
               <div className="flex flex-wrap gap-2">
                 {chips.map((chip) => {
-                  const off = hidden.has(chip.name)
+                  const off = effectiveHidden.has(chip.name)
                   return (
                     <button
                       key={chip.name}

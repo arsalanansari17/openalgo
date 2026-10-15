@@ -20,6 +20,8 @@ opens the same view; the range defaults to the last 30 days. Both tabs run on th
 filters give the same realized number. `/pnl-history` and `/pnl-curve` still work and are unchanged; the Reports
 menu has a new "P&L Analysis" entry next to them while the page is reviewed.
 
+**Filters above the tabs.** The Filters button (symbol, strategy, exchange, product) now sits above the Report / Curve tabs and narrows both. Report uses it as before. Curve: the realized-only lots (non-equity segments) are filtered client-side on all four; the equity curve passes the symbol to `GET /api/v1/pnl/curve` (`symbol_contains`, a pre-filter on the fills, applied before matching) and the strategy list narrows the selection. Exchange and product do not apply to the equity curve (NSE and BSE are one queue, and a product filter would split a position). Needs the endpoint change, so an OpenAlgo restart.
+
 **Deliberately not done yet.** The Report's unrealized card still shows the broker's open positions at the live price;
 the plan is to use the curve's last-day number for Equity (Console prices open lots at the close of the last trading
 day of the range, verified on the May 2026 statement). The strategy chips stay on the Curve tab and the Report keeps

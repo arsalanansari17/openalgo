@@ -365,11 +365,20 @@ export const tradingApi = {
     apiKey: string,
     startDate: string,
     endDate: string,
-    basis: 'range_start' | 'actual_cost' = 'range_start'
+    basis: 'range_start' | 'actual_cost' = 'range_start',
+    symbolContains?: string
   ): Promise<ApiResponse<CurveData & { segment: string }>> => {
     const response = await apiClient.get<ApiResponse<CurveData & { segment: string }>>(
       '/pnl/curve',
-      { params: { apikey: apiKey, start_date: startDate, end_date: endDate, basis } }
+      {
+        params: {
+          apikey: apiKey,
+          start_date: startDate,
+          end_date: endDate,
+          basis,
+          symbol_contains: symbolContains || undefined,
+        },
+      }
     )
     return response.data
   },

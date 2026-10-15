@@ -46,6 +46,8 @@ class PnlCurveSchema(Schema):
         load_default="range_start",
         validate=validate.OneOf(["range_start", "actual_cost"]),
     )
+    # Case-insensitive part of a symbol; narrows the fills before matching.
+    symbol_contains = fields.Str(required=False, load_default=None)
 
 
 class PnlImportSchema(Schema):

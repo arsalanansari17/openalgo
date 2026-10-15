@@ -133,3 +133,25 @@ def test_bars_to_closes_reads_both_epoch_conventions():
     )
     # Both are the bar of 6 May, so one key survives.
     assert list(out) == [date(2026, 5, 6)]
+
+
+def test_symbol_contains_narrows_the_fills_before_matching(ledger, monkeypatch):
+    ledger.add_all(
+        [
+            _row(1, "BUY", 10, 100, datetime(2026, 5, 5, 15, 13), symbol="ABC"),
+            _row(2, "SELL", 10, 110, datetime(2026, 5, 6, 15, 13), symbol="ABC"),
+            _row(3, "BUY", 5, 200, datetime(2026, 5, 5, 15, 13), symbol="XYZ"),
+            _row(4, "SELL", 5, 230, datetime(2026, 5, 6, 15, 13), symbol="XYZ"),
+        ]
+    )
+    ledger.commit()
+    _fake_closes(monkeypatch, {("NIFTY", "NSE_INDEX"): dict.fromkeys(DAYS, 1.0)})
+
+    ok, body, _ = svc.get_pnl_curve("key", "2026-05-05", "2026-05-08", "actual_cost", "xy")
+    assert ok
+    total = sum(sum(v["realized"]) for v in body["data"]["by_strategy"].values())
+    assert total == 150.0  # only XYZ: 5 * (230 - 200)
+
+    ok, body, _ = svc.get_pnl_curve("key", "2026-05-05", "2026-05-08", "actual_cost")
+    total = sum(sum(v["realized"]) for v in body["data"]["by_strategy"].values())
+    assert total == 250.0

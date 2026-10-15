@@ -16,6 +16,10 @@ export interface CurveLot {
   exit_timestamp: string
   realized_pnl: number
   strategy: string | null
+  /** Present on lots from /pnl/history; used by the page-level Filters dialog. */
+  symbol?: string
+  exchange?: string
+  product?: string | null
 }
 
 export interface DailySeries {

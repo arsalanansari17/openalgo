@@ -136,10 +136,15 @@ export default function PnlHistory({ embedded }: { embedded?: PnlEmbeddedFilters
 
   // Table filters (client-side, applied to whichever table is showing).
   const [filterOpen, setFilterOpen] = useState(false)
-  const [symbolFilter, setSymbolFilter] = useState('')
-  const [strategyFilters, setStrategyFilters] = useState<string[]>([])
-  const [exchangeFilter, setExchangeFilter] = useState<string[]>([])
-  const [productFilter, setProductFilter] = useState<string[]>([])
+  const [localSymbolFilter, setSymbolFilter] = useState('')
+  const [localStrategyFilters, setStrategyFilters] = useState<string[]>([])
+  const [localExchangeFilter, setExchangeFilter] = useState<string[]>([])
+  const [localProductFilter, setProductFilter] = useState<string[]>([])
+  // Inside the merged page the Filters dialog is page-level and shared with the curve.
+  const symbolFilter = embedded ? embedded.tableFilters.symbol : localSymbolFilter
+  const strategyFilters = embedded ? embedded.tableFilters.strategies : localStrategyFilters
+  const exchangeFilter = embedded ? embedded.tableFilters.exchanges : localExchangeFilter
+  const productFilter = embedded ? embedded.tableFilters.products : localProductFilter
 
   const showRealized = pnlMode !== 'unrealized'
   const showUnrealized = pnlMode !== 'realized'
@@ -224,6 +229,16 @@ export default function PnlHistory({ embedded }: { embedded?: PnlEmbeddedFilters
       ).sort(),
     [closedTrades, openPositions]
   )
+
+  // Report the chip values to the page-level dialog.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only the option lists matter
+  useEffect(() => {
+    embedded?.onOptions({
+      strategies: strategyOptions,
+      exchanges: exchangeOptions,
+      products: productOptions,
+    })
+  }, [strategyOptions, exchangeOptions, productOptions])
 
   const hasActiveFilters =
     symbolFilter.trim() !== '' ||
@@ -685,78 +700,80 @@ export default function PnlHistory({ embedded }: { embedded?: PnlEmbeddedFilters
               </TabsList>
             </Tabs>
             <div className="flex items-center gap-2">
-              <Dialog open={filterOpen} onOpenChange={setFilterOpen}>
-                <DialogTrigger asChild>
-                  <Button
-                    variant={hasActiveFilters ? 'default' : 'outline'}
-                    size="sm"
-                    className="relative"
-                    aria-label="Open table filters"
-                  >
-                    <Settings2 className="h-4 w-4 mr-2" />
-                    Filters
-                    {hasActiveFilters && (
-                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
-                    )}
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Table Filters</DialogTitle>
-                    <DialogDescription>
-                      Narrow the Day-wise and Scrip-wise tables by symbol, strategy, exchange or
-                      product
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-6 py-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="pnl-filter-symbol">Symbol</Label>
-                      <Input
-                        id="pnl-filter-symbol"
-                        placeholder="e.g. INFY"
-                        value={symbolFilter}
-                        onChange={(e) => setSymbolFilter(e.target.value)}
-                      />
-                    </div>
-                    {strategyOptions.length > 0 && (
-                      <div className="space-y-2">
-                        <Label>Strategy</Label>
-                        <FilterChip
-                          options={strategyOptions}
-                          selected={strategyFilters}
-                          onToggle={(v) => setStrategyFilters((prev) => toggle(prev, v))}
-                        />
-                      </div>
-                    )}
-                    {exchangeOptions.length > 0 && (
-                      <div className="space-y-2">
-                        <Label>Exchange</Label>
-                        <FilterChip
-                          options={exchangeOptions}
-                          selected={exchangeFilter}
-                          onToggle={(v) => setExchangeFilter((prev) => toggle(prev, v))}
-                        />
-                      </div>
-                    )}
-                    {productOptions.length > 0 && (
-                      <div className="space-y-2">
-                        <Label>Product</Label>
-                        <FilterChip
-                          options={productOptions}
-                          selected={productFilter}
-                          onToggle={(v) => setProductFilter((prev) => toggle(prev, v))}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <DialogFooter>
-                    <Button variant="ghost" onClick={clearFilters}>
-                      Clear All
+              {!embedded && (
+                <Dialog open={filterOpen} onOpenChange={setFilterOpen}>
+                  <DialogTrigger asChild>
+                    <Button
+                      variant={hasActiveFilters ? 'default' : 'outline'}
+                      size="sm"
+                      className="relative"
+                      aria-label="Open table filters"
+                    >
+                      <Settings2 className="h-4 w-4 mr-2" />
+                      Filters
+                      {hasActiveFilters && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full" />
+                      )}
                     </Button>
-                    <Button onClick={() => setFilterOpen(false)}>Done</Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Table Filters</DialogTitle>
+                      <DialogDescription>
+                        Narrow the Day-wise and Scrip-wise tables by symbol, strategy, exchange or
+                        product
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-6 py-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="pnl-filter-symbol">Symbol</Label>
+                        <Input
+                          id="pnl-filter-symbol"
+                          placeholder="e.g. INFY"
+                          value={symbolFilter}
+                          onChange={(e) => setSymbolFilter(e.target.value)}
+                        />
+                      </div>
+                      {strategyOptions.length > 0 && (
+                        <div className="space-y-2">
+                          <Label>Strategy</Label>
+                          <FilterChip
+                            options={strategyOptions}
+                            selected={strategyFilters}
+                            onToggle={(v) => setStrategyFilters((prev) => toggle(prev, v))}
+                          />
+                        </div>
+                      )}
+                      {exchangeOptions.length > 0 && (
+                        <div className="space-y-2">
+                          <Label>Exchange</Label>
+                          <FilterChip
+                            options={exchangeOptions}
+                            selected={exchangeFilter}
+                            onToggle={(v) => setExchangeFilter((prev) => toggle(prev, v))}
+                          />
+                        </div>
+                      )}
+                      {productOptions.length > 0 && (
+                        <div className="space-y-2">
+                          <Label>Product</Label>
+                          <FilterChip
+                            options={productOptions}
+                            selected={productFilter}
+                            onToggle={(v) => setProductFilter((prev) => toggle(prev, v))}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <DialogFooter>
+                      <Button variant="ghost" onClick={clearFilters}>
+                        Clear All
+                      </Button>
+                      <Button onClick={() => setFilterOpen(false)}>Done</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              )}
               <Button
                 variant="outline"
                 size="sm"
