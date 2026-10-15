@@ -125,7 +125,7 @@ describe('PnlAnalysis', () => {
     expect(screen.getAllByText('EquityBreakoutPositional').length).toBeGreaterThan(0)
   })
 
-  it('narrows the page when a strategy chip is switched off', async () => {
+  it('shows only the strategies the Filters dialog lets through', async () => {
     window.history.pushState(
       {},
       '',
@@ -135,19 +135,22 @@ describe('PnlAnalysis', () => {
     await userEvent.click(screen.getByRole('button', { name: /fetch the p&l report/i }))
     await screen.findByText('Strategies')
 
-    expect(screen.getByText(/no filters applied/i)).toBeInTheDocument()
-    // The chip in the Strategies pane (the plot legend only hides a line).
     const pane = screen.getByText('Strategies').closest('[data-slot="card"]') as HTMLElement
-    const chip = within(pane)
-      .getAllByRole('button', { pressed: true })
-      .find((b) => b.textContent?.startsWith('Untagged'))
-    expect(chip).toBeDefined()
-    if (chip) await userEvent.click(chip)
+    // Both strategies are in the pane, with the per-strategy columns.
+    expect(within(pane).getByText('Untagged')).toBeInTheDocument()
+    expect(within(pane).getByText('Realized')).toBeInTheDocument()
+    expect(within(pane).getByText('Unrealized')).toBeInTheDocument()
+    expect(within(pane).getByText('Current drawdown')).toBeInTheDocument()
+    expect(screen.getByText(/no filters applied/i)).toBeInTheDocument()
 
-    // The chip edits the same list the Filters dialog edits, so a tag appears.
+    await userEvent.click(screen.getByRole('button', { name: /open p&l filters/i }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'EquityBreakoutPositional' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Done' }))
+
     expect(await screen.findByText(/applied:/i)).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /remove filter equitybreakoutpositional/i })
-    ).toBeInTheDocument()
+    // The pane shows only what was selected there.
+    await waitFor(() => expect(within(pane).queryByText('Untagged')).not.toBeInTheDocument())
+    expect(within(pane).getByText('EquityBreakoutPositional')).toBeInTheDocument()
   })
 })

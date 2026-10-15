@@ -16,7 +16,7 @@ import { PnlSummary } from '@/components/pnl/PnlSummary'
 import { PnlFilterBar } from '@/components/reports/PnlFilterBar'
 import { PnlTableFiltersDialog } from '@/components/reports/PnlTableFiltersDialog'
 import { usePnlAnalysisData } from '@/hooks/usePnlAnalysisData'
-import { EMPTY_TABLE_FILTERS, type PnlTableFilters, usePnlFilters } from '@/hooks/usePnlFilters'
+import { type PnlTableFilters, usePnlFilters } from '@/hooks/usePnlFilters'
 import { buildPnlModel, NO_STRATEGY } from '@/lib/pnlModel'
 import { MAX_STRATEGY_SERIES } from '@/lib/pnlPalette'
 import { makeFormatCurrency } from '@/lib/utils'
@@ -87,13 +87,12 @@ export default function PnlAnalysis() {
     [data, pnlType, filters.tableFilters]
   )
 
-  // Alt+R: every filter off, every plot toggle on, zoom back to the whole range.
+  // Alt+R puts the plot scale back to the whole range. It leaves the filters and
+  // the line toggles alone.
   const [resetSignal, setResetSignal] = useState(0)
-  const { setTableFilters } = filters
   const resetAll = useCallback(() => {
-    setTableFilters(EMPTY_TABLE_FILTERS)
     setResetSignal((n) => n + 1)
-  }, [setTableFilters])
+  }, [])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'r') {
@@ -202,13 +201,7 @@ export default function PnlAnalysis() {
             resetSignal={resetSignal}
           />
 
-          <PnlStrategiesPanel
-            model={model}
-            filters={filters.tableFilters}
-            onFilters={filters.setTableFilters}
-            formatCurrency={formatCurrency}
-            isDark={isDark}
-          />
+          <PnlStrategiesPanel model={model} formatCurrency={formatCurrency} isDark={isDark} />
 
           <PnlBreakdown
             model={model}

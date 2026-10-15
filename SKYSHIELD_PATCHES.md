@@ -32,6 +32,8 @@ live figure for the headline.
 
 **Drawdown and exports.** The Max drawdown card is split in two: Max drawdown (depth, peak to trough, recovery) and Current drawdown (distance below the running peak on the last date, and how long ago the peak was). The curve's lower pane shows the current drawdown with the deepest drawdown so far as a dashed line. In the Breakdown, the export button saves a PNG of the plot (html2canvas-pro, as on the P&L Tracker) when Chart is selected and a CSV when Table is selected.
 
+**Strategies pane and Alt+R.** The strategy filter is the Filters dialog only; the Strategies pane has no chips or All/None any more and lists whatever the dialog let through, with Realized, Unrealized and Current drawdown columns next to Net P&L and Max drawdown. Alt+R resets the plot scale only (not the filters or the line toggles).
+
 **Known limits.** Exchange and product narrow the Scrip view only for Equity (NSE and BSE are one position). The
 Scrip bars use the broker's live unrealized per symbol. Not yet browser-checked.
 

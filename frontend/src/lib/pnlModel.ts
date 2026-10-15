@@ -64,6 +64,8 @@ export interface PnlModel {
   open: PnlHistoryOpenPosition[]
   /** Cumulative realized and the open level, for the combined plot; null when not combined. */
   splitLines: { realized: number[]; unrealized: number[] } | null
+  /** Per selected strategy: realized total and the open level at the end. */
+  perStrategy: Map<string, { realized: number; unrealized: number | null }>
   /** Realized and unrealized for the selection, for the Net P&L card. */
   split: { realized: number; unrealized: number | null }
   /** Option lists for the Filters dialog. */
@@ -140,6 +142,14 @@ export function buildPnlModel(input: PnlModelInput): PnlModel {
     const unrealizedLevel = cumulative(
       curveSeries(curve.dates, folded.byName, 'unrealized', isSelected).total
     )
+    const perStrategy = new Map<string, { realized: number; unrealized: number | null }>()
+    for (const [name, s] of folded.byName) {
+      if (!isSelected(name)) continue
+      perStrategy.set(name, {
+        realized: s.realized.reduce((a, b) => a + b, 0),
+        unrealized: s.unrealized.length ? s.unrealized[s.unrealized.length - 1] : 0,
+      })
+    }
     return {
       mode,
       hasCurve: true,
@@ -148,6 +158,7 @@ export function buildPnlModel(input: PnlModelInput): PnlModel {
       allSeries,
       series,
       realizedSeries,
+      perStrategy,
       splitLines:
         mode === 'combined'
           ? { realized: cumulative(realizedSeries.total), unrealized: unrealizedLevel }
@@ -193,6 +204,23 @@ export function buildPnlModel(input: PnlModelInput): PnlModel {
   const allSeries = foldedLots.length ? dailySeries(foldedLots) : EMPTY
   const selected = foldedLots.filter((lot) => isSelected(strategyOf(lot)))
   const series = selected.length ? dailySeries(selected) : EMPTY
+  const foldName = (strategy: string | null): string => {
+    const name = nameOf(strategy)
+    return name === UNTAGGED || kept.includes(name) ? name : OTHER_STRATEGY
+  }
+  const perStrategy = new Map<string, { realized: number; unrealized: number | null }>()
+  for (const [name, daily] of series.byStrategy) {
+    perStrategy.set(name, {
+      realized: daily.reduce((a, b) => a + b, 0),
+      unrealized: input.unrealizedAvailable ? 0 : null,
+    })
+  }
+  if (input.unrealizedAvailable) {
+    for (const p of open) {
+      const row = perStrategy.get(foldName(p.strategy))
+      if (row) row.unrealized = (row.unrealized ?? 0) + (p.unrealized_pnl ?? 0)
+    }
+  }
   const unrealized = input.unrealizedAvailable
     ? open.reduce((sum, p) => sum + (p.unrealized_pnl ?? 0), 0)
     : null
@@ -204,6 +232,7 @@ export function buildPnlModel(input: PnlModelInput): PnlModel {
     allSeries,
     series,
     realizedSeries: series,
+    perStrategy,
     splitLines: null,
     lots,
     open,

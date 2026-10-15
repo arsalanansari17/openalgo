@@ -51,7 +51,7 @@ interface Props {
   title: string
   startDate: string
   endDate: string
-  /** Bumped by the page (Alt+R) to put line toggles and zoom back. */
+  /** Bumped by the page (Alt+R) to put the plot scale back to the whole range. */
   resetSignal: number
 }
 
@@ -108,11 +108,10 @@ export function PnlCurvePanel({
     return out
   }, [series, totalCum, model.strategyNames, model.coloured, model.splitLines, isDark, ink.total])
 
-  // A reset from the page puts the toggles and the zoom back.
+  // A reset from the page puts the scale back; the toggles stay as they are.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only the signal matters
   useEffect(() => {
     if (resetSignal === 0) return
-    setHiddenLines(new Set())
     setTooltip(null)
     chartRef.current?.timeScale().fitContent()
   }, [resetSignal])
@@ -304,7 +303,7 @@ export function PnlCurvePanel({
           <span>
             <CardTitle>{title}</CardTitle>
             <CardDescription>
-              Click a name on the plot to show or hide a line. Alt+R resets.
+              Click a name on the plot to show or hide a line. Alt+R resets the scale.
             </CardDescription>
           </span>
         </button>

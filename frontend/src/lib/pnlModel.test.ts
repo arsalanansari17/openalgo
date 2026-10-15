@@ -103,6 +103,14 @@ describe('buildPnlModel (no equity curve)', () => {
     ).toHaveLength(0)
   })
 
+  it('splits realized and unrealized per strategy', () => {
+    const model = buildPnlModel(base)
+    expect(model.perStrategy.get('EBP')).toEqual({ realized: 120, unrealized: 50 })
+    expect(model.perStrategy.get('Untagged')).toEqual({ realized: -30, unrealized: -10 })
+    const noLive = buildPnlModel({ ...base, unrealizedAvailable: false })
+    expect(noLive.perStrategy.get('EBP')?.unrealized).toBeNull()
+  })
+
   it('has no unrealized when the end date is not today', () => {
     expect(buildPnlModel({ ...base, unrealizedAvailable: false }).split.unrealized).toBeNull()
   })
@@ -136,6 +144,17 @@ describe('buildPnlModel (equity curve)', () => {
     expect(ebp.split).toEqual({ realized: 200, unrealized: 0 })
     // The chips' own totals still see every strategy.
     expect(ebp.allSeries.total).toEqual([80, 100, 50])
+  })
+
+  it('gives realized and the open level per selected strategy', () => {
+    const all = buildPnlModel(input)
+    expect(all.perStrategy.get('EBP')).toEqual({ realized: 200, unrealized: 0 })
+    expect(all.perStrategy.get('Untagged')).toEqual({ realized: 0, unrealized: 30 })
+    const ebp = buildPnlModel({
+      ...input,
+      filters: { ...EMPTY_TABLE_FILTERS, strategies: ['EBP'] },
+    })
+    expect(Array.from(ebp.perStrategy.keys())).toEqual(['EBP'])
   })
 
   it('says when exchange or product cannot narrow the curve', () => {
