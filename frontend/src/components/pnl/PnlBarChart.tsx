@@ -7,6 +7,7 @@ import { ColorType, CrosshairMode, createChart, HistogramSeries } from 'lightwei
 import { useEffect, useRef, useState } from 'react'
 import type { Bucket } from '@/lib/pnlBuckets'
 import { INK, negative, positive } from '@/lib/pnlPalette'
+import { ChartWatermark } from './ChartWatermark'
 
 const HEIGHT = 340
 
@@ -90,7 +91,8 @@ export function PnlBarChart({ buckets, isDark, formatCurrency }: Props) {
   }
   return (
     <div className="relative">
-      <div ref={containerRef} style={{ height: HEIGHT }} />
+      <ChartWatermark isDark={isDark} />
+      <div ref={containerRef} className="relative z-[1]" style={{ height: HEIGHT }} />
       {tip && (
         <div
           className="pointer-events-none absolute z-10 rounded-md border bg-popover px-3 py-2 text-xs shadow-md"

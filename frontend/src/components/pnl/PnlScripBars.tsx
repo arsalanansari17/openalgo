@@ -8,6 +8,7 @@
 import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { negative, positive } from '@/lib/pnlPalette'
+import { ChartWatermark } from './ChartWatermark'
 
 export interface ScripBar {
   symbol: string
@@ -54,12 +55,13 @@ export function PnlScripBars({
   }
 
   return (
-    <div className="space-y-1">
+    <div className="relative space-y-1">
+      <ChartWatermark isDark={isDark} />
       {items.map((r) => {
         const width = `${(Math.abs(r.total) / maxAbs) * 50}%`
         const positiveBar = r.total >= 0
         return (
-          <div key={r.symbol} className="flex items-center gap-3 text-sm">
+          <div key={r.symbol} className="relative z-[1] flex items-center gap-3 text-sm">
             <span className="w-28 shrink-0 truncate">{r.symbol}</span>
             <div className="relative h-5 flex-1">
               <div className="absolute inset-y-0 left-1/2 w-px bg-border" />

@@ -31,6 +31,7 @@ import type { PnlModel } from '@/lib/pnlModel'
 import { INK, REALIZED_COLOR, strategyColor, UNREALIZED_COLOR } from '@/lib/pnlPalette'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
+import { ChartWatermark, drawWatermark } from './ChartWatermark'
 
 const CURVE_PANE_HEIGHT = 380
 const DRAWDOWN_PANE_HEIGHT = 120
@@ -247,6 +248,7 @@ export function PnlCurvePanel({
         ctx.fillText(label, x + 16, 46)
         x += 16 + ctx.measureText(label).width + 18
       }
+      drawWatermark(ctx, isDark, out.width / 2, band + shot.height / 2)
       ctx.drawImage(shot, 0, band)
       out.toBlob((blob) => {
         if (!blob) return
@@ -325,7 +327,12 @@ export function PnlCurvePanel({
           ) : view === 'chart' ? (
             <>
               <div className="relative">
-                <div ref={containerRef} style={{ height: CHART_HEIGHT }} />
+                <ChartWatermark isDark={isDark} />
+                <div
+                  ref={containerRef}
+                  className="relative z-[1]"
+                  style={{ height: CHART_HEIGHT }}
+                />
                 <div className="absolute left-2 top-2 z-10 flex max-w-[85%] flex-wrap gap-1">
                   {lines.map((line) => {
                     const off = hiddenLines.has(line.name)

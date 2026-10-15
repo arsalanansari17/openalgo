@@ -28,6 +28,8 @@ live figure for the headline.
 
 **Order.** Calendar first (as on Console), then Summary, Curve, Strategies and the Breakdown.
 
+**Watermark.** The OpenAlgo watermark of the intraday P&L Tracker plot sits behind the curve, the day / week / month bars and the scrip bars, and is drawn into the downloaded curve PNG.
+
 **Known limits.** Exchange and product narrow the Scrip view only for Equity (NSE and BSE are one position). The
 Scrip bars use the broker's live unrealized per symbol. Not yet browser-checked.
 
