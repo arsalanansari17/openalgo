@@ -6,6 +6,35 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-15 - P&L: Console's intraday-first matching, and opening lots outside the tradebook
+
+**Files:** `utils/pnl_fifo.py` (`collapse_same_day`, used by `compute_realized_pnl` for equity),
+`services/pnl_curve.py` (same helper; NSE and BSE share one queue and one price), `test/test_pnl_fifo.py`,
+`test/test_pnl_curve.py`. **Upstream:** none (fork-only subsystem).
+
+**Problem.** acc1 May 2026 equity realized: Console +79,681.32, P&L History -96,792.10. Two causes, found by
+diffing Console's own P&L statement against the ledger per symbol (all other symbols matched to the rupee):
+
+1. Shares that never appear in the tradebook (IPO allotments, ESOP, a bonus): the sale read as a short sale.
+   IDEAFORGE (IPO 155, ESOP 904 + 562), IRFC (IPO 575), ZOMATO/ETERNAL (IPO 195), RPEL (bonus 6). Fixed in the
+   data: `adjustments-UF2453-EQ.csv` (rows with trade id `ADJ-<symbol>-<n>`) imported on acc1 on 2026-10-15
+   through the normal P&L History import; backup `db/tradebook.db.bak-20261015-pre-adjustments`. Costs are the
+   ones Console's statements imply (IPO prices; ESOP lots from the May statement's IDEAFORGE-T buy value).
+2. Console settles each day's round trip first: a day's buys and sells are matched against each other at the
+   day's average prices, and only the leftover enters delivery FIFO. Time-order FIFO paired the 7 May FINCABLES
+   sell with an older lot (-53.75 against Console's -2,073.35). Equity only; derivatives stay in plain time
+   order, which is what reconciled F&O to Console to the paisa.
+
+**Verified on:** the raw Console tradebook CSVs (broker tradebook/UF2453): May 2026 79,681.28 against Console
+79,681.32; May 2025 -5,362 against -5,350 (screenshot). Tests: 3 new FIFO cases, one parity test (the curve and
+`compute_realized_pnl` give the same realized total for the same fills). Not yet deployed: needs an OpenAlgo
+restart, so after the close. Deploying changes P&L History equity figures for old months (the intended effect).
+
+**Not done.** NIFTYBEES (3 shares) and KOKUYOCMLN have no confirmed lot; splits and bonuses on other symbols are
+not adjusted (EASEMYTRIP, ADANIPOWER and others in the all-time comparison).
+
+---
+
 ## 2026-10-14 - P&L Curve: daily realized + unrealized curve for equity
 
 **Files:** `services/pnl_curve.py` (new, pure), `services/pnl_history_service.py` (`get_pnl_curve`, daily-close cache),

@@ -180,3 +180,38 @@ def test_a_short_that_survives_the_day_is_dropped_and_reported():
     out = build_curve([fill("SELL", 10, 110, DAYS[0], product=None)], CLOSES, DAYS, BASE)
     assert out["by_strategy"] == {}
     assert out["notes"]["orphan_sells"][0]["symbol"] == "ABC"
+
+
+def test_realized_matches_the_fifo_engine_for_a_mixed_ledger():
+    # Both engines run the same intraday-first rule, so P&L History and the
+    # curve cannot disagree on realized for the same fills.
+    from utils.pnl_fifo import compute_realized_pnl
+
+    f = [
+        fill("BUY", 66, 1056.95, DAYS[0], hour=15, product="CNC"),
+        fill("BUY", 306, 1087.43, DAYS[1], hour=9, product="CNC"),
+        fill("SELL", 306, 1080.65, DAYS[1], hour=11, product="CNC"),
+        fill("BUY", 40, 500.0, DAYS[1], hour=12, product="MIS"),
+        fill("SELL", 25, 510.0, DAYS[1], hour=14, product="MIS"),
+        fill("SELL", 66, 991.31, DAYS[3], hour=15, product="CNC"),
+        fill("SELL", 15, 520.0, DAYS[3], hour=10, product="MIS"),
+    ]
+    out = build_curve(f, CLOSES, DAYS, BASE, BASIS_ACTUAL_COST)
+    curve_total = sum(sum(s["realized"]) for s in out["by_strategy"].values())
+
+    trades = [
+        {
+            "symbol": x["symbol"],
+            "exchange": x["exchange"],
+            "product": x["product"],
+            "segment": "equity",
+            "action": x["action"],
+            "quantity": x["quantity"],
+            "average_price": x["average_price"],
+            "trade_timestamp": x["timestamp"],
+            "strategy": x["strategy"],
+        }
+        for x in f
+    ]
+    fifo_total = compute_realized_pnl(trades).total_realized_pnl
+    assert curve_total == pytest.approx(fifo_total)

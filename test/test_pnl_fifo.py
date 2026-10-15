@@ -12,7 +12,9 @@ are genuinely different contracts.
 from utils.pnl_fifo import compute_realized_pnl
 
 
-def _trade(action, qty, price, ts, exchange="NSE", segment="equity", product="CNC", symbol="AMARAJABAT"):
+def _trade(
+    action, qty, price, ts, exchange="NSE", segment="equity", product="CNC", symbol="AMARAJABAT"
+):
     return {
         "symbol": symbol,
         "exchange": exchange,
@@ -58,10 +60,26 @@ def test_fno_segment_does_not_merge_across_exchange():
     # NFO and BFO are different contracts for the "same" underlying - must
     # stay as separate FIFO queues, unlike cash equity.
     trades = [
-        _trade("BUY", 75, 200.0, "2026-01-05T09:30:00", exchange="NFO", segment="fno", product="NRML",
-               symbol="NIFTY26JANFUT"),
-        _trade("SELL", 75, 210.0, "2026-01-06T09:30:00", exchange="BFO", segment="fno", product="NRML",
-               symbol="NIFTY26JANFUT"),
+        _trade(
+            "BUY",
+            75,
+            200.0,
+            "2026-01-05T09:30:00",
+            exchange="NFO",
+            segment="fno",
+            product="NRML",
+            symbol="NIFTY26JANFUT",
+        ),
+        _trade(
+            "SELL",
+            75,
+            210.0,
+            "2026-01-06T09:30:00",
+            exchange="BFO",
+            segment="fno",
+            product="NRML",
+            symbol="NIFTY26JANFUT",
+        ),
     ]
     result = compute_realized_pnl(trades)
 
@@ -120,10 +138,26 @@ def test_fno_mis_and_nrml_fills_of_one_symbol_match_per_symbol():
     # NRML shows one row. A buy under one product closed by a sell under the
     # other is still one position.
     trades = [
-        _trade("BUY", 65, 10.0, "2026-09-07T09:30:00", exchange="NFO", segment="fno", product="NRML",
-               symbol="NIFTY08SEP2623550PE"),
-        _trade("SELL", 65, 14.0, "2026-09-08T09:30:00", exchange="NFO", segment="fno", product="MIS",
-               symbol="NIFTY08SEP2623550PE"),
+        _trade(
+            "BUY",
+            65,
+            10.0,
+            "2026-09-07T09:30:00",
+            exchange="NFO",
+            segment="fno",
+            product="NRML",
+            symbol="NIFTY08SEP2623550PE",
+        ),
+        _trade(
+            "SELL",
+            65,
+            14.0,
+            "2026-09-08T09:30:00",
+            exchange="NFO",
+            segment="fno",
+            product="MIS",
+            symbol="NIFTY08SEP2623550PE",
+        ),
     ]
     result = compute_realized_pnl(trades)
 
@@ -190,8 +224,15 @@ def test_unrealized_reads_live_holdings_and_positions_not_the_ledger(monkeypatch
             {
                 "data": {
                     "holdings": [
-                        {"symbol": "INFY", "exchange": "NSE", "product": "CNC", "quantity": 10,
-                         "t1_quantity": 0, "pledged_quantity": 0, "average_price": 100.0}
+                        {
+                            "symbol": "INFY",
+                            "exchange": "NSE",
+                            "product": "CNC",
+                            "quantity": 10,
+                            "t1_quantity": 0,
+                            "pledged_quantity": 0,
+                            "average_price": 100.0,
+                        }
                     ]
                 }
             },
@@ -206,14 +247,29 @@ def test_unrealized_reads_live_holdings_and_positions_not_the_ledger(monkeypatch
             {
                 "data": [
                     # Short option: open, valued at the live price.
-                    {"symbol": "NIFTYCE", "exchange": "NFO", "product": "NRML", "quantity": -50,
-                     "average_price": 100.0},
+                    {
+                        "symbol": "NIFTYCE",
+                        "exchange": "NFO",
+                        "product": "NRML",
+                        "quantity": -50,
+                        "average_price": 100.0,
+                    },
                     # Intraday equity is read from holdings only, so it is skipped.
-                    {"symbol": "INFY", "exchange": "NSE", "product": "MIS", "quantity": 5,
-                     "average_price": 100.0},
+                    {
+                        "symbol": "INFY",
+                        "exchange": "NSE",
+                        "product": "MIS",
+                        "quantity": 5,
+                        "average_price": 100.0,
+                    },
                     # Flat rows are not open.
-                    {"symbol": "FLAT", "exchange": "NFO", "product": "NRML", "quantity": 0,
-                     "average_price": 0.0},
+                    {
+                        "symbol": "FLAT",
+                        "exchange": "NFO",
+                        "product": "NRML",
+                        "quantity": 0,
+                        "average_price": 0.0,
+                    },
                 ]
             },
             200,
@@ -249,3 +305,74 @@ def test_unrealized_reads_live_holdings_and_positions_not_the_ledger(monkeypatch
 
     # A range that ended before today has no live price to value against.
     assert _live_open_rows("key", "2000-01-01") == ([], None)
+
+
+def test_equity_same_day_round_trip_is_settled_before_older_lots():
+    # FINCABLES, May 2026: Console books the 7 May sell against the 7 May buy
+    # (-2,073.35), not against the older 5 May lot; the 66 carried lot keeps
+    # its own cost (1056.95) for the sale on 1 June.
+    trades = [
+        _trade("BUY", 66, 1056.95, "2026-05-05T15:16:03", symbol="FINCABLES"),
+        _trade("BUY", 306, 1087.43, "2026-05-07T09:31:07", symbol="FINCABLES"),
+        _trade("SELL", 306, 1080.65, "2026-05-07T11:30:31", symbol="FINCABLES"),
+        _trade("SELL", 66, 991.31, "2026-06-01T15:15:14", symbol="FINCABLES"),
+    ]
+    result = compute_realized_pnl(trades)
+
+    by_exit = {str(lot.exit_timestamp)[:10]: lot for lot in result.realized_lots}
+    assert round(by_exit["2026-05-07"].realized_pnl, 2) == round(306 * (1080.65 - 1087.43), 2)
+    assert round(by_exit["2026-06-01"].realized_pnl, 2) == round(66 * (991.31 - 1056.95), 2)
+    assert result.open_positions == []
+
+
+def test_equity_day_leftover_is_carried_at_the_day_average():
+    trades = [
+        _trade("BUY", 100, 10.0, "2026-05-05T10:00:00"),
+        _trade("BUY", 100, 20.0, "2026-05-05T11:00:00"),
+        _trade("SELL", 100, 30.0, "2026-05-05T14:00:00"),
+    ]
+    result = compute_realized_pnl(trades)
+
+    assert len(result.realized_lots) == 1
+    assert result.realized_lots[0].realized_pnl == 100 * (30.0 - 15.0)
+    assert result.open_positions[0].quantity == 100
+    assert result.open_positions[0].average_price == 15.0
+
+
+def test_fno_is_still_matched_in_plain_time_order():
+    trades = [
+        _trade(
+            "BUY",
+            75,
+            100.0,
+            "2026-05-05T10:00:00",
+            exchange="NFO",
+            segment="fno",
+            product="NRML",
+            symbol="OPT",
+        ),
+        _trade(
+            "BUY",
+            75,
+            120.0,
+            "2026-05-06T10:00:00",
+            exchange="NFO",
+            segment="fno",
+            product="NRML",
+            symbol="OPT",
+        ),
+        _trade(
+            "SELL",
+            75,
+            130.0,
+            "2026-05-06T14:00:00",
+            exchange="NFO",
+            segment="fno",
+            product="NRML",
+            symbol="OPT",
+        ),
+    ]
+    result = compute_realized_pnl(trades)
+
+    # Plain FIFO: the sell closes the oldest lot (100), not the same-day buy (120).
+    assert result.realized_lots[0].realized_pnl == 75 * (130.0 - 100.0)

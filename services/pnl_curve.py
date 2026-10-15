@@ -31,6 +31,8 @@ have exited before one (flagged as a known gap, not handled here).
 from collections import deque
 from datetime import date, datetime, timedelta
 
+from utils.pnl_fifo import collapse_same_day
+
 BASIS_ACTUAL_COST = "actual_cost"
 BASIS_RANGE_START = "range_start"
 VALID_BASES = (BASIS_ACTUAL_COST, BASIS_RANGE_START)
@@ -48,6 +50,24 @@ def _name(strategy) -> str:
     return strategy or UNTAGGED
 
 
+def _exchanges_by_symbol(fills: list[dict]) -> dict[str, str]:
+    """One price exchange per symbol: NSE when the symbol ever traded there.
+
+    NSE and BSE are one security for cash equity, so a position is one queue,
+    valued once at one exchange's close.
+    """
+    chosen: dict[str, str] = {}
+    for fill in fills:
+        symbol, exchange = fill["symbol"], fill["exchange"]
+        if symbol not in chosen or exchange == "NSE":
+            chosen[symbol] = exchange
+    return chosen
+
+
+def _price_exchange(by_symbol: dict[str, str], fill: dict) -> str:
+    return by_symbol.get(fill["symbol"], fill["exchange"])
+
+
 def symbols_needing_closes(fills: list[dict], base_date: date, end: date) -> set[tuple]:
     """(symbol, exchange) pairs that are held at the close of at least one day
     in [base_date, end]. Only these need a daily close from the broker.
@@ -56,9 +76,10 @@ def symbols_needing_closes(fills: list[dict], base_date: date, end: date) -> set
     is flat at every close inside the range is never priced.
     """
     per_key: dict[tuple, list[tuple[date, float]]] = {}
+    exchange_of = _exchanges_by_symbol(fills)
     for fill in fills:
         sign = 1.0 if (fill.get("action") or "").upper() == "BUY" else -1.0
-        per_key.setdefault((fill["symbol"], fill["exchange"]), []).append(
+        per_key.setdefault((fill["symbol"], exchange_of[fill["symbol"]]), []).append(
             (_day(fill["timestamp"]), sign * float(fill.get("quantity") or 0))
         )
 
@@ -177,11 +198,14 @@ def build_curve(
 
     first_day = trading_dates[0]
     notes = _notes()
+    fills_by_symbol = _exchanges_by_symbol(fills)
 
     # Group fills per instrument, in order.
     per_key: dict[tuple, list[dict]] = {}
     for fill in fills:
-        per_key.setdefault((fill["symbol"], fill["exchange"]), []).append(fill)
+        per_key.setdefault((fill["symbol"], _price_exchange(fills_by_symbol, fill)), []).append(
+            fill
+        )
 
     n = len(trading_dates)
     realized: dict[str, list[float]] = {}
@@ -190,6 +214,15 @@ def build_curve(
     for key, key_fills in per_key.items():
         key_closes = closes.get(key, {})
         history = sorted(key_closes)
+
+        # Same-day round trips are settled first, as Console does; only the
+        # leftover reaches the carried-lot queues.
+        intraday, key_fills = collapse_same_day(key_fills, "timestamp")
+        for item in intraday:
+            booked_on = _day(item["exit_timestamp"])
+            day_index = next((i for i, d in enumerate(trading_dates) if d >= booked_on), None)
+            if booked_on >= first_day and day_index is not None:
+                _series(realized, _name(item["strategy"]), n)[day_index] += item["realized_pnl"]
         longs: deque[dict] = deque()
         shorts: deque[dict] = deque()
         idx = 0
