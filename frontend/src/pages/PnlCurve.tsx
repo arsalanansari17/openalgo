@@ -41,6 +41,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import type { PnlEmbeddedFilters } from '@/hooks/usePnlFilters'
 import {
   type CurveData,
   type CurveLot,
@@ -154,7 +155,7 @@ function monthTint(value: number, maxAbs: number): string {
   return value > 0 ? `rgba(34, 197, 94, ${alpha})` : `rgba(239, 68, 68, ${alpha})`
 }
 
-export default function PnlCurve() {
+export default function PnlCurve({ embedded }: { embedded?: PnlEmbeddedFilters } = {}) {
   const { apiKey, user } = useAuthStore()
   const { mode } = useThemeStore()
   const isDark = mode === 'dark'
@@ -162,9 +163,13 @@ export default function PnlCurve() {
   const formatCurrencyRef = useRef(formatCurrency)
   formatCurrencyRef.current = formatCurrency
 
-  const [segment, setSegment] = useState<'all' | Segment>('all')
-  const [startDate, setStartDate] = useState(thirtyDaysAgoStr())
-  const [endDate, setEndDate] = useState(todayStr())
+  const [localSegment, setSegment] = useState<'all' | Segment>('all')
+  const [localStartDate, setStartDate] = useState(thirtyDaysAgoStr())
+  const [localEndDate, setEndDate] = useState(todayStr())
+  // Inside the merged P&L page the filters come from the shared bar.
+  const segment = embedded ? embedded.segment : localSegment
+  const startDate = embedded ? embedded.startDate : localStartDate
+  const endDate = embedded ? embedded.endDate : localEndDate
   const [activeDatePreset, setActiveDatePreset] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [hasFetched, setHasFetched] = useState(false)
@@ -172,7 +177,8 @@ export default function PnlCurve() {
   // Equity uses the daily realized + unrealized curve; every other segment
   // keeps the realized-only lots.
   const [curveData, setCurveData] = useState<CurveData | null>(null)
-  const [pnlType, setPnlType] = useState<CurveMode>('combined')
+  const [localPnlType, setPnlType] = useState<CurveMode>('combined')
+  const pnlType: CurveMode = embedded ? embedded.pnlType : localPnlType
   const [view, setView] = useState<'chart' | 'table'>('chart')
   // Series the user switched off in the legend. Colours follow the strategy,
   // so hiding one never repaints the rest.
@@ -236,6 +242,13 @@ export default function PnlCurve() {
       if (seq === loadSeq.current) setIsLoading(false)
     }
   }
+
+  // Embedded: fetch when the shared Fetch is clicked, and when this tab opens
+  // after a fetch (the counter is already above zero then).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only the counter should trigger a fetch
+  useEffect(() => {
+    if (embedded && embedded.fetchToken > 0) fetchCurve()
+  }, [embedded?.fetchToken])
 
   const handleDatePresetSelect = (start: string, end: string, key: string) => {
     setStartDate(start)
@@ -589,104 +602,109 @@ export default function PnlCurve() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">P&L Curve</h1>
-        <p className="text-muted-foreground">
-          Cumulative realized P&L by the day trades were closed out, per strategy
-        </p>
-      </div>
-
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="curve-segment">Segment</Label>
-              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
-                <SelectTrigger id="curve-segment">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="equity">Equity</SelectItem>
-                  <SelectItem value="fno">Futures & Options</SelectItem>
-                  <SelectItem value="currency">Currency</SelectItem>
-                  <SelectItem value="commodity">Commodity</SelectItem>
-                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label>P&L</Label>
-              <Select
-                value={segment === 'equity' ? pnlType : 'realized'}
-                onValueChange={(v) => setPnlType(v as CurveMode)}
-              >
-                <SelectTrigger id="curve-pnl-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="realized">Realized</SelectItem>
-                  <SelectItem value="unrealized" disabled={segment !== 'equity'}>
-                    Unrealized
-                  </SelectItem>
-                  <SelectItem value="combined" disabled={segment !== 'equity'}>
-                    Combined
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="curve-start-date">Start date</Label>
-              <Input
-                id="curve-start-date"
-                type="date"
-                value={startDate}
-                max={endDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value)
-                  setActiveDatePreset(null)
-                }}
-              />
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="curve-end-date">End date</Label>
-              <Input
-                id="curve-end-date"
-                type="date"
-                value={endDate}
-                min={startDate}
-                max={todayStr()}
-                onChange={(e) => {
-                  setEndDate(e.target.value)
-                  setActiveDatePreset(null)
-                }}
-              />
-            </div>
-            <Button
-              onClick={() => fetchCurve()}
-              disabled={isLoading}
-              aria-label="Fetch the P&L curve"
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4 mr-2" />
-              )}
-              Fetch
-            </Button>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-4 mt-4">
-            <div className="hidden sm:block flex-[2]" />
-            <div className="flex-[2]">
-              <DateRangePresets activeKey={activeDatePreset} onSelect={handleDatePresetSelect} />
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground mt-3">
-            Equity: realized is booked on the day a lot is sold; unrealized is the open lots at each
-            day's close. Other segments show realized only. Corporate actions are not adjusted for.
+      {!embedded && (
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">P&L Curve</h1>
+          <p className="text-muted-foreground">
+            Cumulative realized P&L by the day trades were closed out, per strategy
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      )}
+
+      {!embedded && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="curve-segment">Segment</Label>
+                <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
+                  <SelectTrigger id="curve-segment">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="equity">Equity</SelectItem>
+                    <SelectItem value="fno">Futures & Options</SelectItem>
+                    <SelectItem value="currency">Currency</SelectItem>
+                    <SelectItem value="commodity">Commodity</SelectItem>
+                    <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label>P&L</Label>
+                <Select
+                  value={segment === 'equity' ? pnlType : 'realized'}
+                  onValueChange={(v) => setPnlType(v as CurveMode)}
+                >
+                  <SelectTrigger id="curve-pnl-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="realized">Realized</SelectItem>
+                    <SelectItem value="unrealized" disabled={segment !== 'equity'}>
+                      Unrealized
+                    </SelectItem>
+                    <SelectItem value="combined" disabled={segment !== 'equity'}>
+                      Combined
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="curve-start-date">Start date</Label>
+                <Input
+                  id="curve-start-date"
+                  type="date"
+                  value={startDate}
+                  max={endDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value)
+                    setActiveDatePreset(null)
+                  }}
+                />
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="curve-end-date">End date</Label>
+                <Input
+                  id="curve-end-date"
+                  type="date"
+                  value={endDate}
+                  min={startDate}
+                  max={todayStr()}
+                  onChange={(e) => {
+                    setEndDate(e.target.value)
+                    setActiveDatePreset(null)
+                  }}
+                />
+              </div>
+              <Button
+                onClick={() => fetchCurve()}
+                disabled={isLoading}
+                aria-label="Fetch the P&L curve"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Fetch
+              </Button>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-4 mt-4">
+              <div className="hidden sm:block flex-[2]" />
+              <div className="flex-[2]">
+                <DateRangePresets activeKey={activeDatePreset} onSelect={handleDatePresetSelect} />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-3">
+              Equity: realized is booked on the day a lot is sold; unrealized is the open lots at
+              each day's close. Other segments show realized only. Corporate actions are not
+              adjusted for.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {!hasFetched && !isLoading && (
         <div className="text-center py-16 text-muted-foreground">

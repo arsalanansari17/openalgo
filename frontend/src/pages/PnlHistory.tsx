@@ -9,11 +9,8 @@
  * same philosophy as the built-in intraday PnL Tracker).
  */
 import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
-import type {
-  PnlHistoryClosedTrade,
-  PnlHistoryOpenPosition,
-} from '@/api/trading'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { PnlHistoryClosedTrade, PnlHistoryOpenPosition } from '@/api/trading'
 import { tradingApi } from '@/api/trading'
 import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
 import { DateRangePresets } from '@/components/reports/DateRangePresets'
@@ -46,6 +43,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import type { PnlEmbeddedFilters } from '@/hooks/usePnlFilters'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import type { Segment } from '@/types/trading'
@@ -110,17 +108,22 @@ function toggle(list: string[], value: string): string[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
 }
 
-export default function PnlHistory() {
+export default function PnlHistory({ embedded }: { embedded?: PnlEmbeddedFilters } = {}) {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = makeFormatCurrency(user?.broker)
 
-  const [segment, setSegment] = useState<'all' | Segment>('all')
-  const [startDate, setStartDate] = useState(defaultStartDate())
-  const [endDate, setEndDate] = useState(defaultEndDate())
+  const [localSegment, setSegment] = useState<'all' | Segment>('all')
+  const [localStartDate, setStartDate] = useState(defaultStartDate())
+  const [localEndDate, setEndDate] = useState(defaultEndDate())
   const [activeDatePreset, setActiveDatePreset] = useState<string | null>(null)
   // Which P&L the report shows. The response always carries both sides, so
   // switching is instant; Fetch refreshes the data.
-  const [pnlMode, setPnlMode] = useState<PnlMode>('combined')
+  const [localPnlMode, setPnlMode] = useState<PnlMode>('combined')
+  // Inside the merged P&L page the filters come from the shared bar.
+  const segment = embedded ? embedded.segment : localSegment
+  const startDate = embedded ? embedded.startDate : localStartDate
+  const endDate = embedded ? embedded.endDate : localEndDate
+  const pnlMode: PnlMode = embedded ? embedded.pnlType : localPnlMode
 
   const [isLoading, setIsLoading] = useState(false)
   const [hasFetched, setHasFetched] = useState(false)
@@ -175,6 +178,13 @@ export default function PnlHistory() {
       setIsLoading(false)
     }
   }
+
+  // Embedded: fetch when the shared Fetch is clicked, and when this tab opens
+  // after a fetch (the counter is already above zero then).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only the counter should trigger a fetch
+  useEffect(() => {
+    if (embedded && embedded.fetchToken > 0) fetchHistory()
+  }, [embedded?.fetchToken])
 
   const handleDatePresetSelect = (start: string, end: string, key: string) => {
     setStartDate(start)
@@ -333,7 +343,8 @@ export default function PnlHistory() {
     return Array.from(rows.values())
       .map((row) => ({
         ...row,
-        cumulative: (showRealized ? row.realized : 0) + (showUnrealized ? (row.unrealized ?? 0) : 0),
+        cumulative:
+          (showRealized ? row.realized : 0) + (showUnrealized ? (row.unrealized ?? 0) : 0),
       }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol))
   }, [filteredClosed, filteredOpen, showRealized, showUnrealized])
@@ -387,7 +398,12 @@ export default function PnlHistory() {
           r.exchange,
           r.product ?? '',
           ...(showRealized
-            ? [r.closedQuantity, r.buyValue.toFixed(2), r.sellValue.toFixed(2), r.realized.toFixed(2)]
+            ? [
+                r.closedQuantity,
+                r.buyValue.toFixed(2),
+                r.sellValue.toFixed(2),
+                r.realized.toFixed(2),
+              ]
             : []),
           ...(showUnrealized
             ? [
@@ -444,102 +460,105 @@ export default function PnlHistory() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">P&L History</h1>
-          <p className="text-muted-foreground">
-            Realized and unrealized profit and loss across a date range, backfilled from your daily
-            trade history
-          </p>
+      {!embedded && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">P&L History</h1>
+            <p className="text-muted-foreground">
+              Realized and unrealized profit and loss across a date range, backfilled from your
+              daily trade history
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Fetch: Segment, date range and P&L type. Symbol and Strategy live in
           the Filters popup above the tables, since they only narrow what was
           already fetched. */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-segment">Segment</Label>
-              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
-                <SelectTrigger id="pnl-segment">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="equity">Equity</SelectItem>
-                  <SelectItem value="fno">Futures & Options</SelectItem>
-                  <SelectItem value="currency">Currency</SelectItem>
-                  <SelectItem value="commodity">Commodity</SelectItem>
-                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
-                </SelectContent>
-              </Select>
+      {!embedded && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="pnl-segment">Segment</Label>
+                <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
+                  <SelectTrigger id="pnl-segment">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="equity">Equity</SelectItem>
+                    <SelectItem value="fno">Futures & Options</SelectItem>
+                    <SelectItem value="currency">Currency</SelectItem>
+                    <SelectItem value="commodity">Commodity</SelectItem>
+                    <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="pnl-mode">P&L</Label>
+                <Select value={pnlMode} onValueChange={(v) => setPnlMode(v as PnlMode)}>
+                  <SelectTrigger id="pnl-mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="combined">Combined</SelectItem>
+                    <SelectItem value="realized">Realized P&L</SelectItem>
+                    <SelectItem value="unrealized">Unrealized P&L</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="pnl-start-date">Start date</Label>
+                <Input
+                  id="pnl-start-date"
+                  type="date"
+                  value={startDate}
+                  max={endDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value)
+                    setActiveDatePreset(null)
+                  }}
+                />
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label htmlFor="pnl-end-date">End date</Label>
+                <Input
+                  id="pnl-end-date"
+                  type="date"
+                  value={endDate}
+                  min={startDate}
+                  max={defaultEndDate()}
+                  onChange={(e) => {
+                    setEndDate(e.target.value)
+                    setActiveDatePreset(null)
+                  }}
+                />
+              </div>
+              <Button
+                onClick={() => fetchHistory()}
+                disabled={isLoading}
+                aria-label="Fetch P&L history"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Fetch
+              </Button>
             </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-mode">P&L</Label>
-              <Select value={pnlMode} onValueChange={(v) => setPnlMode(v as PnlMode)}>
-                <SelectTrigger id="pnl-mode">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="combined">Combined</SelectItem>
-                  <SelectItem value="realized">Realized P&L</SelectItem>
-                  <SelectItem value="unrealized">Unrealized P&L</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-start-date">Start date</Label>
-              <Input
-                id="pnl-start-date"
-                type="date"
-                value={startDate}
-                max={endDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value)
-                  setActiveDatePreset(null)
-                }}
-              />
-            </div>
-            <div className="flex-1 space-y-1">
-              <Label htmlFor="pnl-end-date">End date</Label>
-              <Input
-                id="pnl-end-date"
-                type="date"
-                value={endDate}
-                min={startDate}
-                max={defaultEndDate()}
-                onChange={(e) => {
-                  setEndDate(e.target.value)
-                  setActiveDatePreset(null)
-                }}
-              />
-            </div>
-            <Button
-              onClick={() => fetchHistory()}
-              disabled={isLoading}
-              aria-label="Fetch P&L history"
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4 mr-2" />
-              )}
-              Fetch
-            </Button>
-          </div>
-          {/* Spacer matches the combined width of Segment+P&L (2 flex-1
+            {/* Spacer matches the combined width of Segment+P&L (2 flex-1
               fields) so the chip row lands under Start/End date. */}
-          <div className="flex flex-col sm:flex-row gap-4 mt-4">
-            <div className="hidden sm:block flex-[2]" />
-            <div className="flex-[2]">
-              <DateRangePresets activeKey={activeDatePreset} onSelect={handleDatePresetSelect} />
+            <div className="flex flex-col sm:flex-row gap-4 mt-4">
+              <div className="hidden sm:block flex-[2]" />
+              <div className="flex-[2]">
+                <DateRangePresets activeKey={activeDatePreset} onSelect={handleDatePresetSelect} />
+              </div>
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
       {!hasFetched && !isLoading && (
         <div className="text-center py-16 text-muted-foreground">
@@ -685,7 +704,8 @@ export default function PnlHistory() {
                   <DialogHeader>
                     <DialogTitle>Table Filters</DialogTitle>
                     <DialogDescription>
-                      Narrow the Day-wise and Scrip-wise tables by symbol, strategy, exchange or product
+                      Narrow the Day-wise and Scrip-wise tables by symbol, strategy, exchange or
+                      product
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-6 py-4">
@@ -780,7 +800,9 @@ export default function PnlHistory() {
                         <TableRow key={row.date}>
                           <TableCell>{row.date}</TableCell>
                           {showRealized && (
-                            <TableCell className={cn('text-right font-medium', pnlClass(row.realized))}>
+                            <TableCell
+                              className={cn('text-right font-medium', pnlClass(row.realized))}
+                            >
                               {formatCurrency(row.realized)}
                             </TableCell>
                           )}
@@ -869,7 +891,9 @@ export default function PnlHistory() {
                                 <TableCell
                                   className={cn(
                                     'text-right font-medium',
-                                    row.closedQuantity ? pnlClass(row.realized) : 'text-muted-foreground'
+                                    row.closedQuantity
+                                      ? pnlClass(row.realized)
+                                      : 'text-muted-foreground'
                                   )}
                                 >
                                   {row.closedQuantity ? formatCurrency(row.realized) : '-'}
@@ -882,7 +906,9 @@ export default function PnlHistory() {
                                   {row.openQuantity || '-'}
                                 </TableCell>
                                 <TableCell className="text-right">
-                                  {row.averagePrice == null ? '-' : formatCurrency(row.averagePrice)}
+                                  {row.averagePrice == null
+                                    ? '-'
+                                    : formatCurrency(row.averagePrice)}
                                 </TableCell>
                                 <TableCell className="text-right">
                                   {row.ltp == null ? '-' : formatCurrency(row.ltp)}

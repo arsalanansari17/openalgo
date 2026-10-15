@@ -67,6 +67,7 @@ export const navItems: NavItem[] = [
     icon: BarChart3,
     children: [
       { href: '/tradebook', label: 'Tradebook', icon: FileText },
+      { href: '/pnl', label: 'P&L Analysis', icon: PieChart },
       { href: '/pnl-history', label: 'P&L', icon: PieChart },
       { href: '/pnl-curve', label: 'P&L Curve', icon: LineChart },
     ],

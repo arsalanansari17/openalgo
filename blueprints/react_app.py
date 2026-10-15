@@ -216,6 +216,11 @@ def react_pnl_curve():
     return serve_react_app()
 
 
+@react_bp.route("/pnl", strict_slashes=False)
+def react_pnl_analysis():
+    return serve_react_app()
+
+
 @react_bp.route("/holdings")
 def react_holdings():
     return serve_react_app()

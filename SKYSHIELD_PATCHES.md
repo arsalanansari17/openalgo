@@ -6,6 +6,29 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-15 - P&L Analysis: the report and the curve under one filter bar
+
+**Files:** `frontend/src/pages/PnlAnalysis.tsx` (new), `frontend/src/hooks/usePnlFilters.ts` (+ test),
+`frontend/src/components/reports/PnlFilterBar.tsx` (new), `frontend/src/pages/PnlHistory.tsx` and `PnlCurve.tsx`
+(an `embedded` prop; no behaviour change when used on their own), `frontend/src/App.tsx`, `config/navigation.ts`,
+`blueprints/react_app.py`. **Upstream:** none (fork-only pages).
+
+**What.** `/pnl` ("P&L Analysis") has one filter bar (Segment, P&L type, date range with presets, Fetch) and two
+tabs, Report (the P&L History body) and Curve (the P&L Curve body). Segment and P&L type start with no selection and
+Fetch stays disabled until both are chosen. Filters and the tab live in the URL query, so a refresh or a shared link
+opens the same view; the range defaults to the last 30 days. Both tabs run on the same matching engine, so the same
+filters give the same realized number. `/pnl-history` and `/pnl-curve` still work and are unchanged; the Reports
+menu has a new "P&L Analysis" entry next to them while the page is reviewed.
+
+**Deliberately not done yet.** The Report's unrealized card still shows the broker's open positions at the live price;
+the plan is to use the curve's last-day number for Equity (Console prices open lots at the close of the last trading
+day of the range, verified on the May 2026 statement). The strategy chips stay on the Curve tab and the Report keeps
+its Table Filters dialog; both are kept for now and reviewed after use.
+
+**Verified on:** type check, lint, 4 hook tests. Browser check on acc1 after deploy.
+
+---
+
 ## 2026-10-15 - P&L: Console's intraday-first matching, and opening lots outside the tradebook
 
 **Files:** `utils/pnl_fifo.py` (`collapse_same_day`, used by `compute_realized_pnl` for equity),

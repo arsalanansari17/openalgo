@@ -37,6 +37,7 @@ const OrderBook = lazy(() => import('@/pages/OrderBook'))
 const TradeBook = lazy(() => import('@/pages/TradeBook'))
 const PnlHistory = lazy(() => import('@/pages/PnlHistory')) // fork-only, see SKYSHIELD_PATCHES.md
 const PnlCurve = lazy(() => import('@/pages/PnlCurve')) // fork-only, see SKYSHIELD_PATCHES.md
+const PnlAnalysis = lazy(() => import('@/pages/PnlAnalysis')) // fork-only, see SKYSHIELD_PATCHES.md
 const Holdings = lazy(() => import('@/pages/Holdings'))
 const Token = lazy(() => import('@/pages/Token'))
 const Search = lazy(() => import('@/pages/Search'))
@@ -193,6 +194,7 @@ function App() {
                 <Route path="/tradebook" element={<TradeBook />} />
                 <Route path="/pnl-history" element={<PnlHistory />} />
                 <Route path="/pnl-curve" element={<PnlCurve />} />
+                <Route path="/pnl" element={<PnlAnalysis />} />
                 <Route path="/holdings" element={<HoldingsRoute />} />
                 {/* Search routes - match Flask /search/* routes */}
                 <Route path="/search/token" element={<Token />} />
