@@ -183,6 +183,13 @@ export default function PnlAnalysis() {
             </p>
           )}
 
+          <PnlCalendarPanel
+            model={model}
+            startDate={data.startDate}
+            endDate={data.endDate}
+            formatCurrency={formatCurrency}
+          />
+
           <PnlSummary model={model} formatCurrency={formatCurrency} pnlType={pnlType} />
 
           <PnlCurvePanel
@@ -201,13 +208,6 @@ export default function PnlAnalysis() {
             onFilters={filters.setTableFilters}
             formatCurrency={formatCurrency}
             isDark={isDark}
-          />
-
-          <PnlCalendarPanel
-            model={model}
-            startDate={data.startDate}
-            endDate={data.endDate}
-            formatCurrency={formatCurrency}
           />
 
           <PnlBreakdown

@@ -26,6 +26,8 @@ the Filters dialog's strategy list are one state (an inclusion list; empty means
 option. Equity unrealized is the open level at each day's close (Console's rule); other segments keep the broker's
 live figure for the headline.
 
+**Order.** Calendar first (as on Console), then Summary, Curve, Strategies and the Breakdown.
+
 **Known limits.** Exchange and product narrow the Scrip view only for Equity (NSE and BSE are one position). The
 Scrip bars use the broker's live unrealized per symbol. Not yet browser-checked.
 
