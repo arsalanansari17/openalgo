@@ -17,7 +17,6 @@ describe('usePnlFilters', () => {
     expect(result.current.pnlType).toBe('')
     expect(result.current.ready).toBe(false)
     expect(result.current.embedded).toBeNull()
-    expect(result.current.tab).toBe('report')
   })
 
   it('is ready once both are chosen, and Fetch bumps the counter', () => {
@@ -33,13 +32,12 @@ describe('usePnlFilters', () => {
 
   it('reads filters from the URL and ignores values it does not know', () => {
     const { result } = renderHook(() => usePnlFilters(), {
-      wrapper: wrapper('/pnl?segment=fno&type=nonsense&start=2026-05-01&end=2026-05-31&tab=curve'),
+      wrapper: wrapper('/pnl?segment=fno&type=nonsense&start=2026-05-01&end=2026-05-31'),
     })
     expect(result.current.segment).toBe('fno')
     expect(result.current.pnlType).toBe('')
     expect(result.current.startDate).toBe('2026-05-01')
     expect(result.current.endDate).toBe('2026-05-31')
-    expect(result.current.tab).toBe('curve')
   })
 
   it('defaults the range to the last 30 days', () => {

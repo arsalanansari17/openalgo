@@ -6,6 +6,24 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-16 - Old P&L History and P&L Curve pages retired; P&L Analysis is the one page
+
+**Files:** `frontend/src/App.tsx` (routes), `config/navigation.ts` (menu), `hooks/usePageTitle.ts`,
+`hooks/usePnlFilters.ts` (+ test; the tab state is gone), `pages/PnlHistory.tsx` and `pages/PnlCurve.tsx`
+(deleted). **Upstream:** none (fork-only pages).
+
+**What.** `/pnl` ("P&L Analysis") replaces both pages: `/pnl-history` and `/pnl-curve` redirect to it (the Flask
+routes stay registered so a refresh on an old bookmark still reaches the app), and the Reports menu has the one entry.
+Nothing server-side changed: `GET /api/v1/pnl/history`, `/pnl/curve`, `/pnl/trades` and the other `/pnl/*` endpoints
+are used as before (AlgoMirror's P&L Analysis calls the same two). The CSV import stays on the Tradebook page.
+
+**Why now.** The merged page was checked against Console month by month and used for a day; the old pages could
+only drift from it (their realized numbers came from a different matcher before the 2026-10-15 engine change).
+
+**Rollback.** `git revert` of this commit restores both pages and the menu entries.
+
+---
+
 ## 2026-10-15 - P&L Analysis rebuilt as one page: summary, curve, strategies, calendar, breakdown
 
 **Files:** `frontend/src/pages/PnlAnalysis.tsx` (rewritten), `frontend/src/components/pnl/*` (new: PnlSummary,

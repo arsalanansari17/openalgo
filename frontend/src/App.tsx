@@ -35,8 +35,6 @@ const Dashboard = lazy(() => import('@/pages/Dashboard'))
 const Positions = lazy(() => import('@/pages/Positions'))
 const OrderBook = lazy(() => import('@/pages/OrderBook'))
 const TradeBook = lazy(() => import('@/pages/TradeBook'))
-const PnlHistory = lazy(() => import('@/pages/PnlHistory')) // fork-only, see SKYSHIELD_PATCHES.md
-const PnlCurve = lazy(() => import('@/pages/PnlCurve')) // fork-only, see SKYSHIELD_PATCHES.md
 const PnlAnalysis = lazy(() => import('@/pages/PnlAnalysis')) // fork-only, see SKYSHIELD_PATCHES.md
 const Holdings = lazy(() => import('@/pages/Holdings'))
 const Token = lazy(() => import('@/pages/Token'))
@@ -192,8 +190,9 @@ function App() {
                 <Route path="/positions" element={<Positions />} />
                 <Route path="/orderbook" element={<OrderBook />} />
                 <Route path="/tradebook" element={<TradeBook />} />
-                <Route path="/pnl-history" element={<PnlHistory />} />
-                <Route path="/pnl-curve" element={<PnlCurve />} />
+                {/* The old report and curve pages were merged into /pnl (SKYSHIELD_PATCHES.md). */}
+                <Route path="/pnl-history" element={<Navigate to="/pnl" replace />} />
+                <Route path="/pnl-curve" element={<Navigate to="/pnl" replace />} />
                 <Route path="/pnl" element={<PnlAnalysis />} />
                 <Route path="/holdings" element={<HoldingsRoute />} />
                 {/* Search routes - match Flask /search/* routes */}

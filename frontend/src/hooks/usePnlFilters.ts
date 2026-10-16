@@ -1,7 +1,7 @@
 // frontend/src/hooks/usePnlFilters.ts
 /**
  * Shared filters for the merged P&L page (fork-only, SKYSHIELD_PATCHES.md):
- * segment, P&L type, date range and the active tab live in the URL query, so a
+ * segment, P&L type and the date range live in the URL query, so a
  * refresh or a shared link opens the same view. Segment and P&L type start
  * empty on purpose: nothing is fetched until both are chosen.
  */
@@ -11,7 +11,6 @@ import type { Segment } from '@/types/trading'
 
 export type PnlSegmentChoice = '' | 'all' | Segment
 export type PnlTypeChoice = '' | 'realized' | 'unrealized' | 'combined'
-export type PnlTab = 'report' | 'curve'
 
 /** The Filters dialog: narrows both tabs. Empty means no narrowing. */
 export interface PnlTableFilters {
@@ -105,7 +104,6 @@ export function usePnlFilters() {
   const pnlType = (TYPES.includes(rawType as PnlTypeChoice) ? rawType : '') as PnlTypeChoice
   const startDate = params.get('start') || thirtyAgo
   const endDate = params.get('end') || today
-  const tab: PnlTab = params.get('tab') === 'curve' ? 'curve' : 'report'
 
   const update = useCallback(
     (changes: Record<string, string | null>) => {
@@ -147,7 +145,6 @@ export function usePnlFilters() {
     pnlType,
     startDate,
     endDate,
-    tab,
     ready,
     embedded,
     activePreset,
@@ -165,7 +162,6 @@ export function usePnlFilters() {
       setActivePreset(null)
       update({ end: value })
     },
-    setTab: (value: PnlTab) => update({ tab: value }),
     applyPreset: (start: string, end: string, key: string) => {
       setActivePreset(key)
       update({ start, end })
