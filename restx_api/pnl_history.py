@@ -1,15 +1,10 @@
 # restx_api/pnl_history.py
-"""Fork-only REST resources for the consolidated multi-day P&L feature
-(SKYSHIELD_PATCHES.md) - not part of upstream OpenAlgo.
+"""REST resources for multi-day P&L, backed by the tradebook_fills ledger.
 
-Mounted onto the *existing* "/pnl" path (restx_api/__init__.py already
-registers pnl_symbols_ns there for the unrelated sandbox-only /pnl/symbols
-endpoint) as a second, independent Namespace object, so this file - and its
-registration line in __init__.py - are the only touch points; nothing in
-restx_api/pnl_symbols.py or account_schema.py changes.
+Mounted on the existing "/pnl" path as a second Namespace (pnl_symbols_ns
+already registers the sandbox-only /pnl/symbols there).
 
-    GET  /api/v1/pnl/history  - realized P&L for a date range (AlgoMirror's
-                                 aggregator calls this once per account)
+    GET  /api/v1/pnl/history  - realized P&L for a date range
     GET  /api/v1/pnl/trades   - raw fills for a date range, no FIFO -
                                  backs the historical Trade Book view
     POST /api/v1/pnl/import   - backfill the ledger from an exported
@@ -20,6 +15,7 @@ restx_api/pnl_symbols.py or account_schema.py changes.
 """
 
 import csv
+import functools
 import io
 import os
 
@@ -55,7 +51,7 @@ API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 # Distinct internal namespace name from restx_api/pnl_symbols.py's "pnl", so
 # Flask-RESTX/Swagger metadata for the two files never collide even though
 # both mount at the same "/pnl" URL path.
-api = Namespace("pnl_history", description="Consolidated multi-day P&L (fork-only)")
+api = Namespace("pnl_history", description="Consolidated multi-day P&L")
 
 logger = get_logger(__name__)
 
@@ -66,13 +62,8 @@ pnl_strategy_legs_schema = PnlStrategyLegsSchema()
 pnl_attribution_schema = PnlAttributionSchema()
 pnl_set_trade_strategy_schema = PnlSetTradeStrategySchema()
 
-# Column-name aliases across broker tradebook CSV exports. Modeled on
-# Zerodha's own tradebook export columns from memory of a real sample seen
-# earlier in this project - NOT re-verified against an actual file in this
-# change. Kotak's export format has never been checked against a real file
-# at all. Treat both as unverified heuristics until confirmed against a
-# real exported CSV per account (see SKYSHIELD_PATCHES.md) - this is a
-# best-effort mapper, not a confirmed broker contract.
+# Column-name aliases across broker tradebook CSV exports (Zerodha Console's
+# tradebook export; other brokers can be added here).
 _COLUMN_ALIASES = {
     "symbol": ("symbol", "tradingsymbol", "trdsym", "instrument"),
     "exchange": ("exchange", "exch", "exseg"),
@@ -82,31 +73,18 @@ _COLUMN_ALIASES = {
     "average_price": ("average_price", "price", "trade_price", "avgprc"),
     "orderid": ("order_id", "orderid", "nordno"),
     "tradeid": ("trade_id", "tradeid", "flid"),
-    # A single column already carrying a full date+time - used as-is when
-    # present. Kept separate from trade_date/order_execution_time below,
-    # which (per Zerodha's tradebook export) are commonly split into a
-    # date-only and a time-only column instead of one combined field - the
-    # exact gap the user originally flagged ("doesn't have the dates
-    # attached to the trades in csv").
+    # A single column already carrying a full date+time is used as-is; exports
+    # that split date and time use trade_date + order_execution_time instead.
     "trade_timestamp": ("timestamp", "trade_timestamp", "extm", "fill_timestamp"),
     "trade_date": ("trade_date",),
     "order_execution_time": ("order_execution_time",),
-    # Zerodha's Console export carries this directly ("EQ"/"FO"/...) - see
-    # _SEGMENT_ALIASES below for why this is preferred over guessing from
-    # exchange, which Console sets to the plain "NSE"/"BSE" exchange code
-    # for F&O rows too (confirmed against a real exported F&O tradebook
-    # CSV: every row had exchange=NSE, segment=FO - an equity-vs-F&O guess
-    # from exchange alone mis-tagged every options trade as equity).
+    # Console carries the segment ("EQ"/"FO"/...) directly; exchange alone cannot
+    # tell it, since Console reports plain NSE/BSE for F&O rows too.
     "segment": ("segment",),
 }
 
-# Broker-CSV segment code -> this app's VALID_SEGMENTS (database/pnl_db.py).
-# Confirmed against a real Zerodha Console export for "EQ" and "FO" only;
-# the rest are inferred from Console's own segment picker (mirrored by
-# VALID_SEGMENTS itself) and not yet seen in a real file - an unrecognized
-# code is dropped by _normalize_csv_row so the caller falls back to
-# derive_segment(exchange) exactly as before this fix, rather than writing
-# a wrong segment with false confidence.
+# Broker-CSV segment code -> VALID_SEGMENTS (database/pnl_db.py). An unrecognised
+# code is dropped so the caller falls back to derive_segment(exchange).
 _SEGMENT_ALIASES = {
     "EQ": "equity",
     "FO": "fno",
@@ -117,13 +95,8 @@ _SEGMENT_ALIASES = {
 
 
 def _normalize_header(header: str) -> str:
-    """"Trade Type" / "Order Execution Time" / "order-id" -> "trade_type" /
-    "order_execution_time" / "order_id", so header lookup doesn't depend on
-    a broker's own spacing/casing convention. Zerodha's tradebook CSV export
-    uses "Title Case With Spaces" headers; Kotak's format is unverified
-    (see the module docstring) but likely follows a different convention
-    again, which is exactly why this normalizes rather than matching
-    verbatim strings.
+    """ "Trade Type" / "Order Execution Time" / "order-id" -> "trade_type" /
+    "order_execution_time" / "order_id", so lookup ignores header spacing/casing.
     """
     return (header or "").strip().lower().replace(" ", "_").replace("-", "_")
 
@@ -171,199 +144,162 @@ def _normalize_csv_row(raw_row: dict) -> dict:
     return normalized
 
 
-@api.route("/history", strict_slashes=False)
-class PnlHistory(Resource):
-    @limiter.limit(API_RATE_LIMIT)
-    def get(self):
-        """Realized P&L for one account over a date range."""
+def _handle_errors(view):
+    """Shared error mapping: schema failures are 400, anything else a logged 500."""
+
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
         try:
-            params = pnl_history_schema.load(request.args.to_dict())
-            success, response_data, status_code = get_pnl_history(
-                api_key=params["apikey"],
-                start_date=params["start_date"],
-                end_date=params["end_date"],
-                symbol=params.get("symbol"),
-                segment=params.get("segment"),
-                strategy=params.get("strategy"),
-            )
-            return make_response(jsonify(response_data), status_code)
+            return view(*args, **kwargs)
         except ValidationError as err:
             return make_response(jsonify({"status": "error", "message": err.messages}), 400)
         except Exception as e:
-            logger.exception(f"Unexpected error in pnl/history endpoint: {e}")
+            logger.exception(f"Unexpected error in {request.path}: {e}")
             return make_response(
                 jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
             )
+
+    return wrapper
+
+
+@api.route("/history", strict_slashes=False)
+class PnlHistory(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
+    def get(self):
+        """Realized P&L for one account over a date range."""
+        params = pnl_history_schema.load(request.args.to_dict())
+        success, response_data, status_code = get_pnl_history(
+            api_key=params["apikey"],
+            start_date=params["start_date"],
+            end_date=params["end_date"],
+            symbol=params.get("symbol"),
+            segment=params.get("segment"),
+            strategy=params.get("strategy"),
+        )
+        return make_response(jsonify(response_data), status_code)
 
 
 @api.route("/curve", strict_slashes=False)
 class PnlCurve(Resource):
     @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
     def get(self):
         """Daily realized and unrealized P&L per strategy (equity only)."""
-        try:
-            params = pnl_curve_schema.load(request.args.to_dict())
-            success, response_data, status_code = get_pnl_curve(
-                api_key=params["apikey"],
-                start_date=params["start_date"],
-                end_date=params["end_date"],
-                basis=params["basis"],
-                symbol_contains=params.get("symbol_contains"),
-            )
-            return make_response(jsonify(response_data), status_code)
-        except ValidationError as err:
-            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
-        except Exception as e:
-            logger.exception(f"Unexpected error in pnl/curve endpoint: {e}")
-            return make_response(
-                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
-            )
+        params = pnl_curve_schema.load(request.args.to_dict())
+        success, response_data, status_code = get_pnl_curve(
+            api_key=params["apikey"],
+            start_date=params["start_date"],
+            end_date=params["end_date"],
+            basis=params["basis"],
+            symbol_contains=params.get("symbol_contains"),
+        )
+        return make_response(jsonify(response_data), status_code)
 
 
 @api.route("/trades", strict_slashes=False)
 class PnlTrades(Resource):
     @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
     def get(self):
         """Raw fills for one account over a date range - no FIFO matching."""
-        try:
-            params = pnl_history_schema.load(request.args.to_dict())
-            success, response_data, status_code = get_pnl_trades(
-                api_key=params["apikey"],
-                start_date=params["start_date"],
-                end_date=params["end_date"],
-                symbol=params.get("symbol"),
-                segment=params.get("segment"),
-                strategy=params.get("strategy"),
-            )
-            return make_response(jsonify(response_data), status_code)
-        except ValidationError as err:
-            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
-        except Exception as e:
-            logger.exception(f"Unexpected error in pnl/trades endpoint: {e}")
-            return make_response(
-                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
-            )
+        params = pnl_history_schema.load(request.args.to_dict())
+        success, response_data, status_code = get_pnl_trades(
+            api_key=params["apikey"],
+            start_date=params["start_date"],
+            end_date=params["end_date"],
+            symbol=params.get("symbol"),
+            segment=params.get("segment"),
+            strategy=params.get("strategy"),
+        )
+        return make_response(jsonify(response_data), status_code)
 
 
 @api.route("/import", strict_slashes=False)
 class PnlImport(Resource):
     @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
     def post(self):
         """Backfill the ledger from an uploaded broker tradebook CSV."""
+        form_data = pnl_import_schema.load(request.form.to_dict())
+
+        uploaded = request.files.get("file")
+        if uploaded is None or not uploaded.filename:
+            return make_response(
+                jsonify({"status": "error", "message": "A CSV file is required"}), 400
+            )
+
         try:
-            form_data = pnl_import_schema.load(request.form.to_dict())
+            text = uploaded.read().decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return make_response(
+                jsonify({"status": "error", "message": "CSV must be UTF-8 encoded"}), 400
+            )
 
-            uploaded = request.files.get("file")
-            if uploaded is None or not uploaded.filename:
-                return make_response(
-                    jsonify({"status": "error", "message": "A CSV file is required"}), 400
-                )
+        reader = csv.DictReader(io.StringIO(text))
 
-            try:
-                text = uploaded.read().decode("utf-8-sig")
-            except UnicodeDecodeError:
-                return make_response(
-                    jsonify({"status": "error", "message": "CSV must be UTF-8 encoded"}), 400
-                )
-
-            reader = csv.DictReader(io.StringIO(text))
-
-            # The file itself says which format it is: Kotak's Transaction
-            # Statement has Security Name / Market Rate columns no other
-            # export has. The service then also checks the account's broker,
-            # so a Kotak file can't be written into a Zerodha ledger.
-            if is_kotak_statement(reader.fieldnames):
-                success, response_data, status_code = import_kotak_statement(
-                    api_key=form_data["apikey"], raw_rows=list(reader)
-                )
-                return make_response(jsonify(response_data), status_code)
-
-            rows = [_normalize_csv_row(row) for row in reader]
-
-            success, response_data, status_code = import_trades_csv(
-                api_key=form_data["apikey"], rows=rows
+        # The file itself says which format it is: Kotak's Transaction
+        # Statement has Security Name / Market Rate columns no other
+        # export has. The service then also checks the account's broker,
+        # so a Kotak file can't be written into a Zerodha ledger.
+        if is_kotak_statement(reader.fieldnames):
+            success, response_data, status_code = import_kotak_statement(
+                api_key=form_data["apikey"], raw_rows=list(reader)
             )
             return make_response(jsonify(response_data), status_code)
-        except ValidationError as err:
-            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
-        except Exception as e:
-            logger.exception(f"Unexpected error in pnl/import endpoint: {e}")
-            return make_response(
-                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
-            )
+
+        rows = [_normalize_csv_row(row) for row in reader]
+
+        success, response_data, status_code = import_trades_csv(
+            api_key=form_data["apikey"], rows=rows
+        )
+        return make_response(jsonify(response_data), status_code)
 
 
 @api.route("/strategy-legs", strict_slashes=False)
 class PnlStrategyLegs(Resource):
     @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
     def get(self):
-        """Every currently-tracked strategy leg for this account - a thin
-        read wrapper over the already-running strategy book
-        (database/strategy_book_db.py). See services/pnl_history_service.py
-        ::get_strategy_legs for why this isn't derived from pnl_trades.
-        """
-        try:
-            params = pnl_strategy_legs_schema.load(request.args.to_dict())
-            success, response_data, status_code = get_strategy_legs(
-                api_key=params["apikey"],
-                strategy=params.get("strategy"),
-            )
-            return make_response(jsonify(response_data), status_code)
-        except ValidationError as err:
-            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
-        except Exception as e:
-            logger.exception(f"Unexpected error in pnl/strategy-legs endpoint: {e}")
-            return make_response(
-                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
-            )
+        """Every currently-tracked strategy leg for this account, read from
+        the strategy book (database/strategy_book_db.py)."""
+        params = pnl_strategy_legs_schema.load(request.args.to_dict())
+        success, response_data, status_code = get_strategy_legs(
+            api_key=params["apikey"],
+            strategy=params.get("strategy"),
+        )
+        return make_response(jsonify(response_data), status_code)
 
 
 @api.route("/attribution", strict_slashes=False)
 class PnlAttribution(Resource):
     @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
     def post(self):
         """Live positions or holdings split into per-strategy slices, with an
         Unattributed remainder - see services/strategy_attribution.py. Body:
         {apikey, kind: "positions" | "holdings", m2m?: bool}. With m2m, each
         position row also carries today's M2M (services/position_m2m.py).
         """
-        try:
-            # Parsed silently so a malformed body is a 400 from the schema, not a 500.
-            data = pnl_attribution_schema.load(request.get_json(silent=True) or {})
-            success, response_data, status_code = get_strategy_attribution(
-                api_key=data["apikey"], kind=data["kind"], include_m2m=data["m2m"]
-            )
-            return make_response(jsonify(response_data), status_code)
-        except ValidationError as err:
-            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
-        except Exception as e:
-            logger.exception(f"Unexpected error in pnl/attribution endpoint: {e}")
-            return make_response(
-                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
-            )
+        # Parsed silently so a malformed body is a 400 from the schema, not a 500.
+        data = pnl_attribution_schema.load(request.get_json(silent=True) or {})
+        success, response_data, status_code = get_strategy_attribution(
+            api_key=data["apikey"], kind=data["kind"], include_m2m=data["m2m"]
+        )
+        return make_response(jsonify(response_data), status_code)
 
 
 @api.route("/trades/<int:trade_id>/strategy", strict_slashes=False)
 class PnlSetTradeStrategy(Resource):
     @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
     def patch(self, trade_id):
-        """Manual strategy-tag fallback for one historical trade row - see
-        services/pnl_history_service.py::set_trade_strategy. Covers
-        CSV-imported history and any trade with no orderid to
-        automatically join against the strategy book.
-        """
-        try:
-            data = pnl_set_trade_strategy_schema.load(request.json or {})
-            success, response_data, status_code = set_trade_strategy(
-                api_key=data["apikey"],
-                trade_id=trade_id,
-                strategy=data["strategy"],
-            )
-            return make_response(jsonify(response_data), status_code)
-        except ValidationError as err:
-            return make_response(jsonify({"status": "error", "message": err.messages}), 400)
-        except Exception as e:
-            logger.exception(f"Unexpected error in pnl/trades/<id>/strategy endpoint: {e}")
-            return make_response(
-                jsonify({"status": "error", "message": "An unexpected error occurred"}), 500
-            )
+        """Manually tag one historical fill with a strategy (for CSV-imported
+        history and fills with no order id to join against the strategy book)."""
+        data = pnl_set_trade_strategy_schema.load(request.json or {})
+        success, response_data, status_code = set_trade_strategy(
+            api_key=data["apikey"],
+            trade_id=trade_id,
+            strategy=data["strategy"],
+        )
+        return make_response(jsonify(response_data), status_code)
