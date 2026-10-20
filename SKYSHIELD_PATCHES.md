@@ -11,7 +11,7 @@ verify in production, then PR upstream.
 - **Files**: `broker/kotak/database/master_contract_db.py`, `frontend/src/components/layout/Navbar.tsx`, `frontend/src/config/navigation.ts`, `frontend/src/pages/{Positions,TradeBook}.tsx`, `broker/groww/mapping/order_data.py`, `test/test_kotak_master_contract_guard.py`, `frontend/dist`.
 - **Problem**: 59 upstream commits overlapped our fork in 5 files.
 - **Fix**: Kotak: kept upstream's atomic `replace_symtoken_table` swap and re-added our `_ensure_synthetic_index_rows()` (INDIAVIX) after it; the upstream guard test now ignores that row. Navbar: our Reports dropdown uses `<Link>` (upstream removed `useNavigate`); `navItems` keep the Reports group and gain upstream's `collapseBelow`. Positions/TradeBook: kept our grouping/strategy code, added upstream `ChartSymbolLink`/`EmptyState`. Groww order_data: taken from upstream (unused broker). `frontend/dist` rebuilt. Upstream's Kotak unique-`ig` fix (#2178) now matches our earlier copy of it; Zerodha status map (#2185) taken as is.
-- **Verified on**: local build and 4 Kotak/Zerodha test files (26 pass); deploy log below.
+- **Verified on**: local build and 4 Kotak/Zerodha test files (26 pass); deployed 2026-10-20 to acc3, acc4, acc5, acc1, acc2 (fork main 27efd301e; DB backups in db/backup_pre_2029_20261020; services active, no tracebacks, served bundle index-iw91JBm5.js matches; bot-venv openalgo SDK -> 2.0.5).
 
 ## 2026-10-16 - Old P&L History and P&L Curve pages retired; P&L Analysis is the one page
 
