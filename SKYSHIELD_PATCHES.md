@@ -6,6 +6,13 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-20 - Sync with upstream 2.0.2.9 (origin/main 2b52f4661)
+
+- **Files**: `broker/kotak/database/master_contract_db.py`, `frontend/src/components/layout/Navbar.tsx`, `frontend/src/config/navigation.ts`, `frontend/src/pages/{Positions,TradeBook}.tsx`, `broker/groww/mapping/order_data.py`, `test/test_kotak_master_contract_guard.py`, `frontend/dist`.
+- **Problem**: 59 upstream commits overlapped our fork in 5 files.
+- **Fix**: Kotak: kept upstream's atomic `replace_symtoken_table` swap and re-added our `_ensure_synthetic_index_rows()` (INDIAVIX) after it; the upstream guard test now ignores that row. Navbar: our Reports dropdown uses `<Link>` (upstream removed `useNavigate`); `navItems` keep the Reports group and gain upstream's `collapseBelow`. Positions/TradeBook: kept our grouping/strategy code, added upstream `ChartSymbolLink`/`EmptyState`. Groww order_data: taken from upstream (unused broker). `frontend/dist` rebuilt. Upstream's Kotak unique-`ig` fix (#2178) now matches our earlier copy of it; Zerodha status map (#2185) taken as is.
+- **Verified on**: local build and 4 Kotak/Zerodha test files (26 pass); deploy log below.
+
 ## 2026-10-16 - Old P&L History and P&L Curve pages retired; P&L Analysis is the one page
 
 **Files:** `frontend/src/App.tsx` (routes), `config/navigation.ts` (menu), `hooks/usePageTitle.ts`,
