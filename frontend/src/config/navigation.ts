@@ -43,6 +43,11 @@ export interface NavItem {
    * simply never rendered as a direct link when children are present.
    */
   children?: NavItem[]
+  /**
+   * Desktop navbar only: below this Tailwind breakpoint the item leaves the
+   * bar and is listed under More instead. Items without it always stay.
+   */
+  collapseBelow?: 'lg' | 'xl'
 }
 
 // Main navigation items shown in desktop navbar

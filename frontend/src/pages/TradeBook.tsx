@@ -16,6 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
 import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
+import { ChartSymbolLink } from '@/components/trading/ChartSymbolLink'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -1126,7 +1127,7 @@ export default function TradeBook() {
                     const isExpanded = isGroup && expandedOrders.has(group.key)
                     const rows = [
                       <TableRow key={group.key}>
-                        <TableCell className="font-medium">{trade.symbol}</TableCell>
+                        <TableCell className="font-medium"><ChartSymbolLink symbol={trade.symbol} exchange={trade.exchange} /></TableCell>
                         <TableCell>
                           <Badge variant="outline">{trade.exchange}</Badge>
                         </TableCell>
