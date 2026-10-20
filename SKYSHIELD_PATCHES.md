@@ -12,7 +12,7 @@ verify in production, then PR upstream.
 - **Problem**: 2026-10-08 never reached the ledger on acc1 and acc2 (12 and 10 SENSEX fills, net -4,370 and -5,111) and acc1 also missed 2026-10-07 until a manual run. The job exits quietly when there is no broker session or the token cannot be resolved, and that wrote no audit row and no alert, so a missed day looked the same as a job that never fired. It was found ten days later by comparing against Zerodha Console.
 - **Fix**: the job now runs at 15:40 IST (after the 15:30 close) instead of 16:00. A run that stops before fetching writes a `skipped` row in `pnl_capture_runs` with the reason; a skipped, failed or crashed run sends a Telegram and WhatsApp broadcast (best effort, never raised). A market holiday stays silent. The missing 10-08 fills were repaired separately by importing the Console tradebook through the normal import (backups taken first).
 - **Not covered**: a day on which the scheduler itself never fires (process down) still leaves no row; that needs a check outside this job.
-- **Verified on**: `test/test_pnl_capture_run.py` (7 tests) with `test_pnl_dedup_key.py` and `test_pnl_history_csv_import.py` (25 pass). Deployed: see the deploy line added below once rolled out.
+- **Verified on**: `test/test_pnl_capture_run.py` (7 tests) with `test_pnl_dedup_key.py` and `test_pnl_history_csv_import.py` (25 pass). Deployed 2026-10-20 to acc3, acc4, acc5, acc1, acc2 (fork main af541d6c2); each service active after restart and its `pnl_daily_capture` job now shows cron 15:40 IST. The first real run is the 15:40 close on 2026-10-21; 2026-10-20 is a market holiday, so today's run is a silent skip.
 
 ## 2026-10-20 - Sync with upstream 2.0.2.9 (origin/main 2b52f4661)
 
