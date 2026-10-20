@@ -6,6 +6,14 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-20 - P&L daily capture: 15:40 IST, an audit row and an alert when a run is skipped or fails
+
+- **Files**: `services/pnl_capture_service.py`, `database/pnl_db.py` (status comment), `test/test_pnl_capture_run.py`, `docs/design/56-pnl-history/README.md`, `services/pnl_history_service.py` and `frontend/src/pages/TradeBook.tsx` (comments). **Upstream**: none (fork-only subsystem).
+- **Problem**: 2026-10-08 never reached the ledger on acc1 and acc2 (12 and 10 SENSEX fills, net -4,370 and -5,111) and acc1 also missed 2026-10-07 until a manual run. The job exits quietly when there is no broker session or the token cannot be resolved, and that wrote no audit row and no alert, so a missed day looked the same as a job that never fired. It was found ten days later by comparing against Zerodha Console.
+- **Fix**: the job now runs at 15:40 IST (after the 15:30 close) instead of 16:00. A run that stops before fetching writes a `skipped` row in `pnl_capture_runs` with the reason; a skipped, failed or crashed run sends a Telegram and WhatsApp broadcast (best effort, never raised). A market holiday stays silent. The missing 10-08 fills were repaired separately by importing the Console tradebook through the normal import (backups taken first).
+- **Not covered**: a day on which the scheduler itself never fires (process down) still leaves no row; that needs a check outside this job.
+- **Verified on**: `test/test_pnl_capture_run.py` (7 tests) with `test_pnl_dedup_key.py` and `test_pnl_history_csv_import.py` (25 pass). Deployed: see the deploy line added below once rolled out.
+
 ## 2026-10-20 - Sync with upstream 2.0.2.9 (origin/main 2b52f4661)
 
 - **Files**: `broker/kotak/database/master_contract_db.py`, `frontend/src/components/layout/Navbar.tsx`, `frontend/src/config/navigation.ts`, `frontend/src/pages/{Positions,TradeBook}.tsx`, `broker/groww/mapping/order_data.py`, `test/test_kotak_master_contract_guard.py`, `frontend/dist`.

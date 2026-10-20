@@ -125,7 +125,7 @@ called fresh on every `GET /pnl/history` request.
 ## Daily capture job
 
 `services/pnl_capture_service.py`'s `PnlCaptureScheduler` runs
-`run_daily_capture` once daily at 16:00 IST (after NSE/BSE auto square-off
+`run_daily_capture` once daily at 15:40 IST (after the 15:30 close and the NSE/BSE auto square-off
 at 15:20), skipping NSE holidays via the existing
 `database/market_calendar_db.py::is_market_holiday`. It resolves the
 account's own auth via `database.auth_db.get_first_available_api_key` +
@@ -144,7 +144,7 @@ TradeBook.tsx` now has the same Segment/Symbol/Date-range filter row as
 P&L History.
 
 The real constraint: today's trades aren't in `pnl_trades` until the
-16:00 IST daily capture job runs, so Tradebook can't switch to the ledger
+15:40 IST daily capture job runs, so Tradebook can't switch to the ledger
 unconditionally without losing live intraday visibility. Resolution:
 `isHistorical = startDate !== today || endDate !== today`. Only when the
 range is exactly today/today does `fetchTrades` fall back to the existing

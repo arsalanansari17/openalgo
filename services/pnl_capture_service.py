@@ -50,13 +50,14 @@ logger = get_logger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# Run once shortly after the exchange square-off/settlement window (NSE/BSE
-# auto square-off is 3:20 PM per docs/design/OpenAlgo setup notes) so the
-# day's fills, including any post-square-off exit, are final. Not tied to
-# any one account's own strategy exit time (SkyShieldAT exits 15:14) since
-# this job is a generic OpenAlgo feature, not SkyShieldAT-specific.
-CAPTURE_HOUR_IST = 16
-CAPTURE_MINUTE_IST = 0
+# Run once the NSE/BSE session has closed (15:30) and the 15:20 auto square-off
+# has settled, so the day's fills, including any post-square-off exit, are
+# final. Not tied to any one account's own strategy exit time (SkyShieldAT
+# exits 15:14) since this job is a generic OpenAlgo feature, not
+# SkyShieldAT-specific. Kept ahead of 16:00 so the run and its retry window
+# still fit before a VM that stops at 16:15 IST.
+CAPTURE_HOUR_IST = 15
+CAPTURE_MINUTE_IST = 40
 
 
 def _default_broker_exchanges():
@@ -67,6 +68,62 @@ def _default_broker_exchanges():
     further.
     """
     return "NSE"
+
+
+def _notify_capture_problem(run_date: str, status: str, reason: str) -> None:
+    """Tell the operator a day's capture did not complete (best effort).
+
+    A run that fails or is skipped leaves that day's fills out of the ledger
+    until someone notices; this makes it visible the same evening. Goes to
+    every linked Telegram and WhatsApp user whose notifications are on. A
+    problem sending the alert is logged and never raised: it must not mask the
+    capture result or break the scheduler job.
+    """
+    message = (
+        f"*P&L capture {status}* for {run_date}\n"
+        f"{reason}\n"
+        "Today's fills are not in the P&L ledger yet. Re-run the capture or "
+        "import the broker tradebook."
+    )
+    try:
+        from services.telegram_alert_service import telegram_alert_service
+
+        if telegram_alert_service.enabled and telegram_alert_service.is_bot_active():
+            telegram_alert_service.send_broadcast_alert(message)
+    except Exception:
+        logger.exception("Could not send the P&L capture Telegram alert")
+    try:
+        from services.whatsapp_alert_service import whatsapp_alert_service
+
+        if whatsapp_alert_service.enabled:
+            whatsapp_alert_service.send_broadcast_alert(message)
+    except Exception:
+        logger.exception("Could not send the P&L capture WhatsApp alert")
+
+
+def _record_skipped_run(run_date: str, reason: str) -> None:
+    """Write the audit row for a run that stopped before fetching anything,
+    then alert. Without the row a skipped day is indistinguishable from a day
+    the job never fired."""
+    now_ist = datetime.now(IST).replace(tzinfo=None)
+    try:
+        db_session.add(
+            PnlCaptureRun(
+                run_date=run_date,
+                status="skipped",
+                error=reason,
+                started_at=now_ist,
+                finished_at=now_ist,
+            )
+        )
+        db_session.commit()
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not write the skipped P&L capture audit row")
+    finally:
+        db_session.remove()
+    logger.warning(f"PnL capture skipped for {run_date}: {reason}")
+    _notify_capture_problem(run_date, "skipped", reason)
 
 
 def _lookup_strategy(orderid) -> str | None:
@@ -116,6 +173,7 @@ def capture_today_trades(auth_token: str, broker: str) -> dict:
             run.finished_at = datetime.now(IST).replace(tzinfo=None)
             db_session.commit()
             logger.error(f"PnL capture failed for {run_date}: {message}")
+            _notify_capture_problem(run_date, "failed", message)
             return {"status": "failed", "error": message}
 
         trades = response.get("data") or []
@@ -189,6 +247,7 @@ def capture_today_trades(auth_token: str, broker: str) -> dict:
         run.finished_at = datetime.now(IST).replace(tzinfo=None)
         db_session.commit()
         logger.exception(f"PnL capture crashed for {run_date}: {e}")
+        _notify_capture_problem(run_date, "failed", str(e))
         return {"status": "failed", "error": str(e)}
     finally:
         db_session.remove()
@@ -210,14 +269,15 @@ def run_daily_capture():
 
     from database.auth_db import get_auth_token_broker, get_first_available_api_key
 
+    run_date = today.strftime("%Y-%m-%d")
     api_key = get_first_available_api_key()
     if not api_key:
-        logger.warning("PnL capture skipped: no active broker session found")
+        _record_skipped_run(run_date, "No active broker session was found.")
         return
 
     auth_token, broker = get_auth_token_broker(api_key)
     if not auth_token or not broker:
-        logger.warning("PnL capture skipped: could not resolve auth token/broker")
+        _record_skipped_run(run_date, "The broker session token could not be resolved.")
         return
 
     capture_today_trades(auth_token, broker)
