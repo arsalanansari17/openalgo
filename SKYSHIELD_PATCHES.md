@@ -1048,7 +1048,7 @@ B:f)` per file, never ambiguous range diffs after one gave a backwards read on
     `calculate_portfolio_statistics`'s total-quantity sum (our own
     fix/holdings-pledge-t1-quantity, above -- origin drops these fields
     entirely and would have silently broken
-    `strategies/ironcondor/live/imaginary_collateral.py`'s pledge/T1 reads
+    `strategies/fno/intraday/ironcondor/live/imaginary_collateral.py`'s pledge/T1 reads
     on acc1+acc2 had this been taken wholesale).
   - `frontend/src/hooks/useLivePrice.ts` -- took origin's new
     `day_change`/`day_change_percent` feature, re-added
