@@ -50,6 +50,12 @@ class PnlCurveSchema(Schema):
     symbol_contains = fields.Str(required=False, load_default=None)
 
 
+class PnlIntradaySchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    # pnl: the broker's own P&L (ends on the Positions page's total); m2m: today's move only.
+    basis = fields.Str(required=False, load_default="pnl", validate=validate.OneOf(["pnl", "m2m"]))
+
+
 class PnlImportSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     # The uploaded file itself arrives as multipart/form-data, not JSON, so

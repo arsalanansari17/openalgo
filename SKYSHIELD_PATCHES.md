@@ -6,6 +6,16 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-22 - `GET /api/v1/pnl/intraday`: the P&L Tracker curve by API key, for AlgoMirror's P&L Plot
+
+- **Files**: `services/pnl_intraday_service.py` (new), `restx_api/pnl_history.py`, `restx_api/pnl_history_schema.py`, `test/test_pnl_intraday_service.py`
+- **Problem**: AlgoMirror's combined intraday P&L Plot rebuilt each account's curve with its own copy of the old upstream tracker (positionbook average as the carried cost, last 1-minute candle as the price, no tie to Positions), so its figure did not match the Positions page. OpenAlgo's tracker already has the right formula (`services/pnl_tracker_m2m.py`, last point = the Positions page's own figure) but is served only to a logged-in browser session, which AlgoMirror does not have.
+- **Fix**: a fork-only route that returns the same curve for an API key (`basis=pnl|m2m`, default `pnl`), built from the account's tradebook and positionbook through `build_m2m_tracker_response`. When the builder cannot be exact it returns `data: null` (never a zero curve) so the caller falls back to its own calculation. No change to the tracker blueprint.
+- **Not for upstream**: it sits beside the other fork-only `/pnl/*` routes.
+- **Verified on**: unit tests only (33 passed with `test_pnl_tracker_m2m.py`). Not deployed: needs a restart on every VM, after 15:40 IST.
+
+---
+
 ## 2026-10-20 - P&L daily capture: 15:40 IST, an audit row and an alert when a run is skipped or fails
 
 - **Files**: `services/pnl_capture_service.py`, `database/pnl_db.py` (status comment), `test/test_pnl_capture_run.py`, `docs/design/56-pnl-history/README.md`, `services/pnl_history_service.py` and `frontend/src/pages/TradeBook.tsx` (comments). **Upstream**: none (fork-only subsystem).

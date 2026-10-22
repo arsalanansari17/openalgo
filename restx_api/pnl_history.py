@@ -5,6 +5,7 @@ Mounted on the existing "/pnl" path as a second Namespace (pnl_symbols_ns
 already registers the sandbox-only /pnl/symbols there).
 
     GET  /api/v1/pnl/history  - realized P&L for a date range
+    GET  /api/v1/pnl/intraday - today's intraday P&L curve (Positions-page basis)
     GET  /api/v1/pnl/trades   - raw fills for a date range, no FIFO -
                                  backs the historical Trade Book view
     POST /api/v1/pnl/import   - backfill the ledger from an exported
@@ -34,6 +35,7 @@ from services.pnl_history_service import (
     import_trades_csv,
     set_trade_strategy,
 )
+from services.pnl_intraday_service import get_intraday_pnl
 from utils.kotak_statement import is_kotak_statement
 from utils.logging import get_logger
 
@@ -42,6 +44,7 @@ from .pnl_history_schema import (
     PnlCurveSchema,
     PnlHistorySchema,
     PnlImportSchema,
+    PnlIntradaySchema,
     PnlSetTradeStrategySchema,
     PnlStrategyLegsSchema,
 )
@@ -58,6 +61,7 @@ logger = get_logger(__name__)
 pnl_history_schema = PnlHistorySchema()
 pnl_curve_schema = PnlCurveSchema()
 pnl_import_schema = PnlImportSchema()
+pnl_intraday_schema = PnlIntradaySchema()
 pnl_strategy_legs_schema = PnlStrategyLegsSchema()
 pnl_attribution_schema = PnlAttributionSchema()
 pnl_set_trade_strategy_schema = PnlSetTradeStrategySchema()
@@ -193,6 +197,19 @@ class PnlCurve(Resource):
             end_date=params["end_date"],
             basis=params["basis"],
             symbol_contains=params.get("symbol_contains"),
+        )
+        return make_response(jsonify(response_data), status_code)
+
+
+@api.route("/intraday", strict_slashes=False)
+class PnlIntraday(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
+    def get(self):
+        """Today's intraday P&L curve for one account, on the Positions page's basis."""
+        params = pnl_intraday_schema.load(request.args.to_dict())
+        success, response_data, status_code = get_intraday_pnl(
+            api_key=params["apikey"], basis=params["basis"]
         )
         return make_response(jsonify(response_data), status_code)
 
