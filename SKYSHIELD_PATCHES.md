@@ -13,7 +13,7 @@ verify in production, then PR upstream.
 - **Fix**: a fork-only route that returns the same curve for an API key (`basis=pnl|m2m`, default `pnl`), built from the account's tradebook and positionbook through `build_m2m_tracker_response`. When the builder cannot be exact it returns `data: null` (never a zero curve) so the caller falls back to its own calculation. No change to the tracker blueprint.
 - **Not for upstream**: it sits beside the other fork-only `/pnl/*` routes.
 - **Follow-up (same day, found by the first live check on acc4)**: the P&L basis ended on Kotak's own P&L for a carried leg, which is only today's move from yesterday's settlement (1,033.50), while the Positions page and the Kotak app showed 2,160.60, measured from the real entry prices in the strategy book. `services/pnl_tracker_m2m.py` now applies the same rule as the Positions page (`strategy_book_pnl`, a port of `applyCostBasis`) to the P&L basis, for the tracker page and the new route alike. The M2M basis was already right (1,033.50). Tests in `test_pnl_tracker_m2m.py`.
-- **Verified on**: unit tests only (33 passed with `test_pnl_tracker_m2m.py`). Not deployed: needs a restart on every VM, after 15:40 IST.
+- **Verified on**: deployed 2026-10-22 evening to acc1-acc5 (`388395a5e`, then the follow-up `0dca900b7`); SkyShieldAT sanity 0 failed on all five; the P&L Tracker on acc4 (Kotak) ends on the Positions page figure (2,160.60) on the P&L basis and on 1,033.50 on the M2M basis, confirmed by the user. AlgoMirror `66dfebc` deployed the same evening; its plot calls this route.
 
 ---
 
