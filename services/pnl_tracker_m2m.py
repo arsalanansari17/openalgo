@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 import pytz
 
-from services.position_m2m import SUPPORTED_EXCHANGES, compute_m2m
+from services.position_m2m import SUPPORTED_EXCHANGES, _key, compute_m2m
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -54,6 +54,71 @@ def _f(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+CARRY_FORWARD_BASIS = "carry_forward_valuation"
+
+
+def strategy_book_pnl(
+    positions: list[dict[str, Any]], attribution_rows: list[dict[str, Any]]
+) -> dict[tuple, float]:
+    """The P&L the Positions page shows for a Kotak leg carried from a previous
+    day, keyed by (symbol, exchange, product).
+
+    Kotak reports a carried leg at yesterday's settlement price, so its own P&L
+    is only today's move. When the strategy book fully explains the row (every
+    open slice attributed, on the broker's side, adding up to the broker
+    quantity) the leg is measured from the real entry average instead, plus what
+    the strategies realized today on it. Same rule as `applyCostBasis` in
+    frontend/src/lib/trading/strategyAttribution.ts; rows it does not cover are
+    absent from the result and keep the broker's own P&L.
+    """
+    by_key = {_key(r): r for r in attribution_rows or []}
+    out: dict[tuple, float] = {}
+    for pos in positions:
+        if pos.get("average_price_basis") != CARRY_FORWARD_BASIS:
+            continue
+        qty = _f(pos.get("quantity"))
+        if qty == 0:
+            continue
+        row = by_key.get(_key(pos))
+        if not row or row.get("mismatch"):
+            continue
+        slices = row.get("slices") or []
+        open_slices = [sl for sl in slices if _f(sl.get("quantity")) != 0]
+        if not open_slices or any(not sl.get("attributed") for sl in open_slices):
+            continue
+        if any((_f(sl.get("quantity")) > 0) != (qty > 0) for sl in open_slices):
+            continue
+        if abs(sum(_f(sl.get("quantity")) for sl in open_slices) - qty) > 1e-9:
+            continue
+        weight = sum(abs(_f(sl.get("quantity"))) for sl in open_slices)
+        average = (
+            sum(abs(_f(sl.get("quantity"))) * _f(sl.get("average_price")) for sl in open_slices)
+            / weight
+        )
+        if average <= 0:
+            continue
+        realized = sum(_f(sl.get("today_realized_pnl")) for sl in slices)
+        ltp = _f(pos.get("ltp"))
+        out[_key(pos)] = round(qty * (ltp - average) + realized if ltp > 0 else realized, 2)
+    return out
+
+
+def _strategy_book_pnl_for(positions: list[dict[str, Any]]) -> dict[tuple, float]:
+    """strategy_book_pnl from the live strategy book; empty when the book is
+    unavailable (the broker's own P&L is then used, as before)."""
+    if not any(p.get("average_price_basis") == CARRY_FORWARD_BASIS for p in positions):
+        return {}
+    try:
+        from database.strategy_book_db import get_strategy_legs
+        from services.strategy_attribution import KIND_POSITIONS, attribute
+
+        rows = attribute(positions, get_strategy_legs(), KIND_POSITIONS)["rows"]
+        return strategy_book_pnl(positions, rows)
+    except Exception:
+        logger.warning("Strategy book unavailable, using the broker's own P&L", exc_info=True)
+        return {}
 
 
 def build_m2m_frame(index: pd.DatetimeIndex, rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -264,6 +329,10 @@ def build_m2m_tracker_response(
         return summarize(pd.DataFrame(), basis)
     index = pd.date_range(start=open_at, end=end, freq="1min", tz=IST)
 
+    # The P&L basis ends on the Positions page's figure, which measures a carried
+    # Kotak leg from its real entry price (strategy book), not the broker's own.
+    book_pnl = _strategy_book_pnl_for(positions) if basis == "pnl" else {}
+
     rows = []
     last_value: dict[tuple, float] = {}
     for position in positions:
@@ -273,7 +342,7 @@ def build_m2m_tracker_response(
         overnight_cost = None
         if basis == "pnl":
             try:
-                broker_pnl = float(position.get("pnl"))
+                broker_pnl = book_pnl.get(key, float(position.get("pnl")))
             except (TypeError, ValueError):
                 return None
             last_value[key] = broker_pnl

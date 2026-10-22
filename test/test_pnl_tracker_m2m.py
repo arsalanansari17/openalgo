@@ -369,3 +369,66 @@ def test_an_intraday_only_book_gives_the_same_curve_on_both_bases():
     assert pnl["pnl_series"] == m2m["pnl_series"]
     assert pnl["drawdown_series"] == m2m["drawdown_series"]
     assert pnl["current_mtm"] == m2m["current_mtm"] == -448.5
+
+
+# --- carried Kotak legs: the P&L basis uses the strategy book's entry average ---
+
+
+def _book_row(symbol, qty, avg, realized=0.0):
+    return {
+        "symbol": symbol,
+        "exchange": "NFO",
+        "product": "NRML",
+        "mismatch": False,
+        "slices": [
+            {
+                "quantity": qty,
+                "average_price": avg,
+                "attributed": True,
+                "today_realized_pnl": realized,
+            }
+        ],
+    }
+
+
+def test_strategy_book_pnl_replaces_the_carry_valuation_pnl():
+    # acc4, 2026-10-22: Kotak's own P&L (3256.5, -2223.0) was only today's move;
+    # the Positions page measured from the real entries and showed 5202.6 / -3042.
+    from services.pnl_tracker_m2m import strategy_book_pnl
+
+    short = {
+        "symbol": "S",
+        "exchange": "NFO",
+        "product": "NRML",
+        "quantity": -195,
+        "ltp": 25.30,
+        "average_price": 42.0,
+        "pnl": 3256.5,
+        "average_price_basis": "carry_forward_valuation",
+    }
+    long_ = dict(short, symbol="L", quantity=195, ltp=9.65, average_price=21.05, pnl=-2223.0)
+    rows = [_book_row("S", -195, 51.98), _book_row("L", 195, 25.25)]
+    out = strategy_book_pnl([short, long_], rows)
+    assert out[("S", "NFO", "NRML")] == 5202.6
+    assert out[("L", "NFO", "NRML")] == -3042.0
+    assert round(sum(out.values()), 2) == 2160.6
+
+
+def test_strategy_book_pnl_leaves_unexplained_rows_alone():
+    from services.pnl_tracker_m2m import strategy_book_pnl
+
+    pos = {
+        "symbol": "S",
+        "exchange": "NFO",
+        "product": "NRML",
+        "quantity": -195,
+        "ltp": 25.3,
+        "pnl": 1.0,
+        "average_price_basis": "carry_forward_valuation",
+    }
+    # quantity the book does not explain, not flagged, and no row at all
+    assert strategy_book_pnl([pos], [_book_row("S", -100, 50.0)]) == {}
+    assert (
+        strategy_book_pnl([dict(pos, average_price_basis=None)], [_book_row("S", -195, 50.0)]) == {}
+    )
+    assert strategy_book_pnl([pos], []) == {}
