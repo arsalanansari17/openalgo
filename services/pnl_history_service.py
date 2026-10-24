@@ -11,7 +11,7 @@ explicit design call - "this is how zerodha or broker would be doing" -
 extended from one trading day to an arbitrary date range.
 """
 
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_
@@ -47,9 +47,35 @@ _LONG_HOLD_SEGMENTS = ("equity", "mutual_fund")
 
 _IST = ZoneInfo("Asia/Kolkata")
 
+_MARKET_OPEN = time(9, 15)
+_MARKET_CLOSE = time(15, 30)
+
+
+def _market_is_open(now=None):
+    """True on a weekday between the opening and closing bell (IST). Exchange
+    holidays are not known here; on one a closed-market read and a live read
+    price the same last close anyway for brokers whose quotes are sound."""
+    now = now or datetime.now(_IST)
+    return now.weekday() < 5 and _MARKET_OPEN <= now.time() < _MARKET_CLOSE
+
+
+def _last_closes(api_key, wanted, today):
+    """{(symbol, exchange): latest daily close on or before today} from the
+    broker's daily history, the price the broker's own app shows once the
+    market is shut. Instruments with no history are simply absent."""
+    out = {}
+    start = today - timedelta(days=10)
+    for symbol, exchange in wanted:
+        closes = _daily_closes(api_key, symbol, exchange, start, today)
+        days = [d for d in closes if d <= today]
+        if days:
+            out[(symbol, exchange)] = closes[max(days)]
+    return out
+
 
 def _live_open_rows(api_key, end_date, segment=None):
-    """What is open right now, valued at the live price: the source of the
+    """What is open right now, valued at the live price while the market
+    trades and at the latest daily close once it is shut: the source of the
     report's unrealized P&L.
 
     Equity comes from the broker's holdings, everything else (F&O, currency,
@@ -112,25 +138,42 @@ def _live_open_rows(api_key, end_date, segment=None):
 
         wanted = sorted({(row["symbol"], row["exchange"]) for _k, _r, row in open_rows})
         ltps = {}
+        sources = {}
         if wanted:
-            ok, quotes, _status = get_multiquotes(
-                [{"symbol": sym, "exchange": exch} for sym, exch in wanted], api_key=api_key
-            )
-            if ok:
-                for item in quotes.get("results", []):
-                    quote = item.get("data")
-                    if isinstance(quote, dict) and quote.get("ltp"):
-                        ltps[(item.get("symbol"), item.get("exchange"))] = float(quote["ltp"])
+            # Live quotes only while the market trades. Shut, some brokers'
+            # quote feeds return prices that are not the session's close
+            # (Kotak's did, 24 Oct 2026: CYIENT 1387.9 against a real 1233.0),
+            # so the latest daily close is used, as the broker's own app does.
+            if not _market_is_open():
+                today = datetime.now(_IST).date()
+                for key, close in _last_closes(api_key, wanted, today).items():
+                    ltps[key] = close
+                    sources[key] = "close"
+            missing = [key for key in wanted if key not in ltps]
+            if missing:
+                ok, quotes, _status = get_multiquotes(
+                    [{"symbol": sym, "exchange": exch} for sym, exch in missing], api_key=api_key
+                )
+                if ok:
+                    for item in quotes.get("results", []):
+                        quote = item.get("data")
+                        if isinstance(quote, dict) and quote.get("ltp"):
+                            key = (item.get("symbol"), item.get("exchange"))
+                            ltps[key] = float(quote["ltp"])
+                            sources[key] = "quote"
 
         rows = []
         total = 0.0
         for kind, raw, row in open_rows:
-            ltp = ltps.get((row["symbol"], row["exchange"]))
+            key = (row["symbol"], row["exchange"])
+            ltp = ltps.get(key)
+            price_source = sources.get(key)
             if ltp is None:
                 try:
                     ltp = float(raw.get("ltp")) or None
                 except (TypeError, ValueError):
                     ltp = None
+                price_source = "broker" if ltp is not None else None
             for part in row["slices"]:
                 quantity = part["quantity"]
                 if abs(quantity) <= 1e-9:
@@ -150,6 +193,7 @@ def _live_open_rows(api_key, end_date, segment=None):
                         "average_price": round(part["average_price"], 2),
                         "strategy": part["strategy"] if part["attributed"] else None,
                         "ltp": None if ltp is None else round(ltp, 2),
+                        "price_source": price_source,
                         "unrealized_pnl": unrealized,
                     }
                 )

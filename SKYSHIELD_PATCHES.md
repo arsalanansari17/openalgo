@@ -6,6 +6,15 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-24 - P&L unrealized: open lots priced at the last daily close when the market is shut, not at a quote
+
+- **Files**: `services/pnl_history_service.py` (`_market_is_open`, `_last_closes`, `_live_open_rows`), `test/test_pnl_unrealized_pricing.py` (new), `test/test_pnl_fifo.py` (pins the market open for the live-quote test)
+- **Problem**: `/pnl/history` valued open holdings and positions from `get_multiquotes`. On the three Kotak accounts the quotes feed returned prices that were not the session's close on a Saturday (CYIENT 1387.9 against a real close of 1233.0; GABRIEL 1399.8 against 1370.7; its `open`, `high`, `low` were not Friday's either, only `prev_close` was). acc3's unrealized read +28,614 against +6,666 in the Kotak holdings; the Scrip and F&O views of AlgoMirror's P&L Analysis were off for the same reason. Zerodha's quotes were fine. The daily-history curve was already right on every account.
+- **Fix**: the market is treated as open on a weekday from 09:15 to 15:30 IST. Open: live quotes, as before. Shut: each symbol's latest daily close on or before today from the broker's history (the price the broker's own app shows), falling back to the quote and then the broker row's own `ltp` when a symbol has no history. Each open row now carries `price_source` (`close`, `quote` or `broker`).
+- **Not covered**: exchange holidays that fall on a weekday inside 09:15 to 15:30 are treated as open (quotes). Kotak's quotes have not yet been checked during market hours. Old holdings that are not in the ledger are still left out of the Equity curve's unrealized (a different matter, counted in `/pnl/history`'s total but not in the curve).
+- **Not for upstream**: fork-only `/pnl/*` subsystem.
+- **Verified on**: `test/test_pnl_unrealized_pricing.py` (10 tests) with the P&L test files (166 pass). Deploy and live check below once done.
+
 ## 2026-10-22 - `GET /api/v1/pnl/intraday`: the P&L Tracker curve by API key, for AlgoMirror's P&L Plot
 
 - **Files**: `services/pnl_intraday_service.py` (new), `restx_api/pnl_history.py`, `restx_api/pnl_history_schema.py`, `test/test_pnl_intraday_service.py`

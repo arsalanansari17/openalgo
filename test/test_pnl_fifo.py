@@ -198,9 +198,11 @@ def test_lot_and_open_position_carry_the_entry_fill_strategy():
 
 def test_unrealized_reads_live_holdings_and_positions_not_the_ledger(monkeypatch):
     import database.strategy_book_db as book
+    import services.pnl_history_service as svc
     from services import holdings_service, positionbook_service, quotes_service
     from services.pnl_history_service import _live_open_rows
 
+    monkeypatch.setattr(svc, "_market_is_open", lambda now=None: True)
     monkeypatch.setattr(
         book,
         "get_strategy_legs",
