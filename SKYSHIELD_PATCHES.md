@@ -6,6 +6,16 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-10-27 - Positions: a carried Kotak leg that was exited today shows its P&L from the strategy book, not Kotak's day slice
+
+- **Files**: `frontend/src/lib/trading/strategyAttribution.ts` (`applyCostBasis`, `hasCarryForwardValuation`), `frontend/src/lib/trading/strategyAttribution.test.ts`
+- **Problem**: after the expiry-day exits (ExpiryFade legs) and the NDS roll, the closed legs showed the wrong P&L and the total with them. Kotak's pnl for a leg carried from yesterday is `sell - buy` with the carried quantity at the previous settlement price (the flagged `carry_forward_valuation`), so once the leg is flat it reports only that day's move, not the result since entry. `applyCostBasis` skipped every row with quantity 0, so these rows kept the wrong figure (the 10-09 average fix only handled open legs).
+- **Fix**: a flagged row that is flat now takes the sum of `today_realized_pnl` over its strategy-book slices (closing quantity x (exit - book average), i.e. measured from the real entry). Conditions: row present, no mismatch, at least one slice, every slice attributed; otherwise Kotak's figure stays. The row is marked `strategy_book`; average stays 0. `hasCarryForwardValuation` now counts closed rows, so the attribution is fetched when only closed flagged rows exist.
+- **Also**: `Positions.tsx` marks the P&L cell of a row still on Kotak's carry valuation (`*` and a tooltip), so a figure the book could not correct is not read as the result since entry.
+- **Not covered**: `frontend/dist` not rebuilt and nothing deployed. A leg whose close the book never saw (no slice) keeps Kotak's figure.
+- **Upstream**: stacked on the carried-average work in draft PR #2202 (frontend only); fold into it when #2181 merges.
+- **Verified on**: `strategyAttribution.test.ts` (36 pass), `tsc --noEmit` clean. AlgoMirror has the same fix (`app/utils/position_cost_basis.py`, 10 tests).
+
 ## 2026-10-24 - P&L unrealized: open lots priced at the last daily close when the market is shut, not at a quote
 
 - **Files**: `services/pnl_history_service.py` (`_market_is_open`, `_last_closes`, `_live_open_rows`), `test/test_pnl_unrealized_pricing.py` (new), `test/test_pnl_fifo.py` (pins the market open for the live-quote test)

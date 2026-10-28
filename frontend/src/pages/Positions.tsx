@@ -1222,6 +1222,11 @@ export default function Positions() {
                                   {position.ltp !== undefined ? formatCurrency(position.ltp) : '-'}
                                 </TableCell>
                                 <TableCell
+                                  title={
+                                    position.average_price_basis === CARRY_FORWARD_BASIS
+                                      ? "Kotak's figure for a leg carried from a previous day: only the move since the previous settlement, not the result since entry (the strategy book could not explain this row)"
+                                      : undefined
+                                  }
                                   className={cn(
                                     'w-[120px] text-right font-medium',
                                     isProfit(position.pnl) ? 'text-green-600' : 'text-red-600'
@@ -1234,6 +1239,9 @@ export default function Positions() {
                                       <TrendingDown className="h-4 w-4" />
                                     )}
                                     {formatCurrency(position.pnl)}
+                                    {position.average_price_basis === CARRY_FORWARD_BASIS && (
+                                      <sup className="text-muted-foreground">*</sup>
+                                    )}
                                   </div>
                                 </TableCell>
                                 <TableCell

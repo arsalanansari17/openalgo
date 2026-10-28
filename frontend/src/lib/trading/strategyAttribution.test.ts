@@ -431,11 +431,32 @@ describe('applyCostBasis', () => {
     expect(applyCostBasis([flagged()], attribution([{ slices: [] }]))[0].average_price).toBe(12.35)
   })
 
-  it('leaves a closed row and a row for another contract alone', () => {
-    const closed = flagged({ quantity: 0, average_price: 0 })
+  it('gives a flagged closed row the P&L the strategies realized, not the broker day slice', () => {
+    // A carried leg exited today: Kotak's P&L is sell - buy with the leg at its overnight valuation
+    const closed = flagged({ quantity: 0, average_price: 0, pnl: -559 })
+    const out = applyCostBasis(
+      [closed],
+      attribution([{ slices: [slice('A', 0, 0, 300), slice('B', 0, 0, -50)] }])
+    )[0]
+    expect(out.pnl).toBe(250)
+    expect(out.average_price).toBe(0)
+    expect(out.average_price_basis).toBe('strategy_book')
+  })
+
+  it('leaves a closed row alone when the book cannot explain it', () => {
+    const closed = flagged({ quantity: 0, average_price: 0, pnl: -559 })
+    const none = attribution([{ slices: [] }])
+    const unattributed = attribution([{ slices: [slice('Unattributed', 0, 0, 100)] }])
+    const mismatch = attribution([{ slices: [slice('NDS', 0, 0, 100)], mismatch: true }])
+    for (const attr of [none, unattributed, mismatch])
+      expect(applyCostBasis([closed], attr)[0]).toBe(closed)
+    const unflagged = pos({ quantity: 0, average_price: 0, pnl: -559 })
     expect(
-      applyCostBasis([closed], attribution([{ slices: [slice('NDS', -130, 59.85)] }]))[0]
-    ).toBe(closed)
+      applyCostBasis([unflagged], attribution([{ slices: [slice('NDS', 0, 0, 100)] }]))[0]
+    ).toBe(unflagged)
+  })
+
+  it('leaves a row for another contract alone', () => {
     const other = flagged({ symbol: 'OTHER' })
     expect(
       applyCostBasis([other], attribution([{ slices: [slice('NDS', -130, 59.85)] }]))[0]
@@ -447,6 +468,6 @@ describe('applyCostBasis', () => {
     expect(applyCostBasis(rows, null)).toBe(rows)
     expect(hasCarryForwardValuation(rows)).toBe(true)
     expect(hasCarryForwardValuation([pos()])).toBe(false)
-    expect(hasCarryForwardValuation([flagged({ quantity: 0 })])).toBe(false)
+    expect(hasCarryForwardValuation([flagged({ quantity: 0 })])).toBe(true)
   })
 })

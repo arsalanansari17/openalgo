@@ -50,11 +50,9 @@ export const CARRY_FORWARD_BASIS = 'carry_forward_valuation' as const
 /** Our marker: the average price now comes from the strategy book. */
 export const STRATEGY_BOOK_BASIS = 'strategy_book' as const
 
-/** True when at least one open row carries the broker's carry-forward valuation as its "average". */
+/** True when at least one row, open or closed, carries the broker's carry-forward valuation. */
 export function hasCarryForwardValuation(positions: Position[]): boolean {
-  return positions.some(
-    (p) => p.average_price_basis === CARRY_FORWARD_BASIS && (Number(p.quantity) || 0) !== 0
-  )
+  return positions.some((p) => p.average_price_basis === CARRY_FORWARD_BASIS)
 }
 
 /**
@@ -65,8 +63,14 @@ export function hasCarryForwardValuation(positions: Position[]): boolean {
  * The strategy book (services/strategy_attribution.py) keeps the real fills per strategy, so a
  * flagged row is corrected only when the book fully explains it: every open slice attributed, all on
  * the broker's side, adding up to exactly the broker quantity, with no mismatch. Anything else keeps
- * Kotak's figures (still flagged, so the page can say what they are). Rows without the flag, closed
- * rows, and every other broker's rows are returned untouched, as the same objects.
+ * Kotak's figures (still flagged, so the page can say what they are). Rows without the flag and every
+ * other broker's rows are returned untouched, as the same objects.
+ *
+ * A flagged row that is flat now (a carried leg exited today: an expiry-day exit, an NDS roll) has no
+ * average to correct, but Kotak's P&L for it is only that day's slice, measured from the overnight
+ * valuation. It takes the P&L the strategies realized on the contract today (closing quantity x (exit
+ * - book average)), which is measured from the real entry; same conditions: no mismatch, at least one
+ * slice, every slice attributed.
  *
  * P&L and percent are recomputed from the corrected average and the live price, plus what the
  * strategies realized today on the contract; without a price only the realized part is shown.
@@ -82,10 +86,14 @@ export function applyCostBasis(
   return positions.map((pos): Position => {
     if (pos.average_price_basis !== CARRY_FORWARD_BASIS) return pos
     const qty = Number(pos.quantity) || 0
-    if (qty === 0) return pos
 
     const row = byKey.get(`${pos.symbol}|${pos.exchange}|${pos.product}`)
     if (!row || row.mismatch) return pos
+    if (qty === 0) {
+      if (row.slices.length === 0 || row.slices.some((s) => !s.attributed)) return pos
+      const realized = row.slices.reduce((sum, s) => sum + (s.today_realized_pnl || 0), 0)
+      return { ...pos, pnl: realized, pnlpercent: 0, average_price_basis: STRATEGY_BOOK_BASIS }
+    }
     const open = row.slices.filter((s) => s.quantity !== 0)
     if (open.length === 0 || open.some((s) => !s.attributed)) return pos
     if (open.some((s) => Math.sign(s.quantity) !== Math.sign(qty))) return pos
