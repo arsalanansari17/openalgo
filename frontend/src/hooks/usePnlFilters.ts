@@ -7,6 +7,7 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
+import type { PnlMode } from '@/api/trading'
 import type { Segment } from '@/types/trading'
 
 export type PnlSegmentChoice = '' | 'all' | Segment
@@ -37,6 +38,8 @@ export interface PnlOptions {
 /** What an embedded tab gets: always complete, plus a counter that bumps on Fetch. */
 export interface PnlEmbeddedFilters {
   segment: 'all' | Segment
+  /** live (default) | analyzer (paper) | all */
+  mode: PnlMode
   pnlType: 'realized' | 'unrealized' | 'combined'
   startDate: string
   endDate: string
@@ -59,6 +62,7 @@ const SEGMENTS: PnlSegmentChoice[] = [
   'mutual_fund',
 ]
 const TYPES: PnlTypeChoice[] = ['realized', 'unrealized', 'combined']
+const MODES: PnlMode[] = ['live', 'analyzer', 'all']
 
 function isoDate(d: Date): string {
   return d.toLocaleDateString('en-CA')
@@ -102,6 +106,8 @@ export function usePnlFilters() {
   ) as PnlSegmentChoice
   const rawType = params.get('type') ?? ''
   const pnlType = (TYPES.includes(rawType as PnlTypeChoice) ? rawType : '') as PnlTypeChoice
+  const rawMode = params.get('mode') ?? 'live'
+  const mode = (MODES.includes(rawMode as PnlMode) ? rawMode : 'live') as PnlMode
   const startDate = params.get('start') || thirtyAgo
   const endDate = params.get('end') || today
 
@@ -129,6 +135,7 @@ export function usePnlFilters() {
       ready
         ? {
             segment: segment as 'all' | Segment,
+            mode,
             pnlType: pnlType as 'realized' | 'unrealized' | 'combined',
             startDate,
             endDate,
@@ -137,11 +144,12 @@ export function usePnlFilters() {
             onOptions,
           }
         : null,
-    [ready, segment, pnlType, startDate, endDate, fetchToken, tableFilters, onOptions]
+    [ready, segment, mode, pnlType, startDate, endDate, fetchToken, tableFilters, onOptions]
   )
 
   return {
     segment,
+    mode,
     pnlType,
     startDate,
     endDate,
@@ -153,6 +161,7 @@ export function usePnlFilters() {
     setTableFilters,
     options,
     setSegment: (value: PnlSegmentChoice) => update({ segment: value }),
+    setMode: (value: PnlMode) => update({ mode: value === 'live' ? null : value }),
     setPnlType: (value: PnlTypeChoice) => update({ type: value }),
     setStartDate: (value: string) => {
       setActivePreset(null)

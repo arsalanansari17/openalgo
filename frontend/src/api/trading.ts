@@ -36,6 +36,9 @@ export interface DepthLevel {
  * openalgo's SKYSHIELD_PATCHES.md). Mirrors
  * services/pnl_history_service.py::get_pnl_history's response exactly.
  */
+/** live = real broker fills, analyzer = paper fills (SkyShield client), all = both. */
+export type PnlMode = 'live' | 'analyzer' | 'all'
+
 export interface PnlHistoryDailyRow {
   date: string
   realized_pnl: number
@@ -55,6 +58,8 @@ export interface PnlHistoryClosedTrade {
   realized_pnl: number
   // Strategy tag of the entry fill; null when untagged.
   strategy: string | null
+  /** live | analyzer (paper) */
+  mode?: 'live' | 'analyzer'
 }
 
 export interface PnlHistoryOpenPosition {
@@ -338,7 +343,7 @@ export const tradingApi = {
     apiKey: string,
     startDate: string,
     endDate: string,
-    options?: { symbol?: string; segment?: Segment; strategy?: string }
+    options?: { symbol?: string; segment?: Segment; strategy?: string; mode?: PnlMode }
   ): Promise<ApiResponse<PnlHistoryData>> => {
     const response = await apiClient.get<ApiResponse<PnlHistoryData>>('/pnl/history', {
       params: {
@@ -351,6 +356,7 @@ export const tradingApi = {
         symbol: options?.symbol || undefined,
         segment: options?.segment || undefined,
         strategy: options?.strategy || undefined,
+        mode: options?.mode || undefined,
       },
     })
     return response.data
@@ -394,7 +400,7 @@ export const tradingApi = {
     apiKey: string,
     startDate: string,
     endDate: string,
-    options?: { symbol?: string; segment?: Segment; strategy?: string }
+    options?: { symbol?: string; segment?: Segment; strategy?: string; mode?: PnlMode }
   ): Promise<ApiResponse<Trade[]>> => {
     const response = await apiClient.get<ApiResponse<Trade[]>>('/pnl/trades', {
       params: {
@@ -404,6 +410,7 @@ export const tradingApi = {
         symbol: options?.symbol || undefined,
         segment: options?.segment || undefined,
         strategy: options?.strategy || undefined,
+        mode: options?.mode || undefined,
       },
     })
     return response.data

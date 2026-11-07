@@ -12,12 +12,14 @@ extended from one trading day to an arbitrary date range.
 """
 
 from datetime import UTC, date, datetime, time, timedelta, timezone
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_
 
 from database.auth_db import get_auth_token_broker
 from database.pnl_db import (
+    MODES,
     VALID_SEGMENTS,
     PnlTrade,
     db_session,
@@ -204,7 +206,7 @@ def _live_open_rows(api_key, end_date, segment=None):
 
 
 def _parse_range_and_build_query(
-    start_date, end_date, symbol=None, segment=None, strategy=None, fifo_lookback=False
+    start_date, end_date, symbol=None, segment=None, strategy=None, fifo_lookback=False, mode="live"
 ):
     """Shared by get_pnl_history and get_pnl_trades: parse the date range,
     validate segment, and build the base PnlTrade query. Returns
@@ -285,6 +287,10 @@ def _parse_range_and_build_query(
         query = query.filter(PnlTrade.segment == segment)
     if strategy:
         query = query.filter(PnlTrade.strategy == strategy)
+    # mode: "live" (default, so every existing report keeps showing only real
+    # broker fills), "analyzer" (paper fills only) or "all".
+    if mode and mode != "all":
+        query = query.filter(PnlTrade.mode == mode)
 
     return None, query, start, end
 
@@ -296,6 +302,7 @@ def get_pnl_history(
     symbol: str | None = None,
     segment: str | None = None,
     strategy: str | None = None,
+    mode: str = "live",
 ):
     """Realized P&L for one account over [start_date, end_date] (inclusive,
     "YYYY-MM-DD"), optionally narrowed to one symbol, one segment (one of
@@ -310,7 +317,8 @@ def get_pnl_history(
         return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
 
     error, query, start, end = _parse_range_and_build_query(
-        start_date, end_date, symbol=symbol, segment=segment, strategy=strategy, fifo_lookback=True
+        start_date, end_date, symbol=symbol, segment=segment, strategy=strategy, fifo_lookback=True,
+        mode=mode,
     )
     if error:
         return error
@@ -336,11 +344,18 @@ def get_pnl_history(
                 "average_price": row.average_price,
                 "trade_timestamp": row.trade_timestamp.isoformat(),
                 "strategy": row.strategy,
+                "mode": row.mode or "live",
             }
             for row in rows
         ]
 
-        result = compute_realized_pnl(trades)
+        # FIFO per mode: a paper (analyzer) fill must never close a live lot.
+        realized_lots, mode_of = [], {}
+        for m in sorted({t["mode"] for t in trades}):
+            part = compute_realized_pnl([t for t in trades if t["mode"] == m])
+            realized_lots.extend(part.realized_lots)
+            mode_of.update({id(lot): m for lot in part.realized_lots})
+        result = SimpleNamespace(realized_lots=realized_lots)
 
         # Only report lots that actually closed within [start_date,
         # end_date] - fills from outside the range were pulled in solely so
@@ -355,7 +370,10 @@ def get_pnl_history(
             if lot.exit_timestamp and start_date <= str(lot.exit_timestamp)[:10] <= end_date
         ]
         daily = summarize_by_day(lots_in_range)
-        open_rows, total_unrealised = _live_open_rows(api_key, end_date, segment)
+        # Open positions come from the live broker: none for a paper-only report.
+        open_rows, total_unrealised = (
+            ([], None) if mode == "analyzer" else _live_open_rows(api_key, end_date, segment)
+        )
 
         # Raw-fill count inside the requested range specifically (not the
         # wider fifo_lookback query above) - matches what "N trades this
@@ -369,6 +387,7 @@ def get_pnl_history(
                 "data": {
                     "start_date": start_date,
                     "end_date": end_date,
+                    "mode": mode,
                     "total_realized_pnl": round(
                         sum(lot.realized_pnl for lot in lots_in_range), 2
                     ),
@@ -394,6 +413,7 @@ def get_pnl_history(
                             "exit_timestamp": str(lot.exit_timestamp),
                             "realized_pnl": round(lot.realized_pnl, 2),
                             "strategy": lot.strategy,
+                            "mode": mode_of.get(id(lot), "live"),
                         }
                         for lot in lots_in_range
                     ],
@@ -419,6 +439,7 @@ def get_pnl_trades(
     symbol: str | None = None,
     segment: str | None = None,
     strategy: str | None = None,
+    mode: str = "live",
 ):
     """Raw fills for one account over [start_date, end_date] - no FIFO
     matching, just the ledger rows as-is. Backs the historical Tradebook
@@ -440,7 +461,7 @@ def get_pnl_trades(
         return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
 
     error, query, start, end = _parse_range_and_build_query(
-        start_date, end_date, symbol=symbol, segment=segment, strategy=strategy
+        start_date, end_date, symbol=symbol, segment=segment, strategy=strategy, mode=mode
     )
     if error:
         return error
@@ -461,6 +482,7 @@ def get_pnl_trades(
                 "tradeid": row.tradeid or "",
                 "segment": row.segment,
                 "strategy": row.strategy,
+                "mode": row.mode or "live",
                 # Plain isoformat() (T separator) - matches get_pnl_history's
                 # closed_trades entry/exit timestamps above (line ~129) and
                 # the canonical ISO 8601 shape every timestamp on the wire
@@ -689,13 +711,14 @@ def _persist_import_rows(rows, skip_days_with_capture=False):
                     # order still within the order-tag's 30-day retention;
                     # older/pre-OpenAlgo history stays unattributed unless
                     # manually tagged later (set_trade_strategy below).
-                    strategy=_lookup_strategy_for_import(row.get("orderid")),
+                    strategy=row.get("strategy") or _lookup_strategy_for_import(row.get("orderid")),
                     action=action,
                     quantity=float(quantity),
                     average_price=float(price),
                     trade_value=float(quantity) * float(price),
                     trade_timestamp=parsed_timestamp,
-                    source="import",
+                    source=row.get("source") or "import",
+                    mode=row.get("mode") if row.get("mode") in MODES else "live",
                 )
             )
             imported += 1
@@ -715,6 +738,26 @@ def _persist_import_rows(rows, skip_days_with_capture=False):
         return False, {"status": "error", "message": str(e)}, 500
     finally:
         db_session.remove()
+
+
+def add_paper_fill(api_key: str, fill: dict) -> tuple[bool, dict, int]:
+    """Store one paper fill (mode=analyzer) in the ledger, e.g. from the
+    SkyShield client, which paper-trades the server's signals. Writes a
+    ledger row only: nothing is sent to the broker. Only the OpenAlgo API key
+    is checked (not the broker session), so a paper fill is kept even when the
+    broker login has lapsed. Idempotent on tradeid via the usual dedup key.
+    """
+    from database.auth_db import verify_api_key
+
+    if not verify_api_key(api_key):
+        return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+    row = {**fill, "mode": fill.get("mode") or "analyzer", "source": "paper"}
+    if row["mode"] not in MODES:
+        return False, {"status": "error", "message": f"mode must be one of {MODES}"}, 400
+    ok, body, code = _persist_import_rows([row])
+    if ok and body.get("data", {}).get("skipped_invalid"):
+        return False, {"status": "error", "message": "invalid fill (symbol/exchange/action/quantity/price)"}, 400
+    return ok, body, code
 
 
 def get_strategy_legs(api_key: str, strategy: str | None = None):

@@ -45,6 +45,22 @@ export function PnlFilterBar({ filters }: { filters: Filters }) {
             </Select>
           </div>
           <div className="flex-1 space-y-1">
+            <Label htmlFor="pnl-mode">Mode</Label>
+            <Select
+              value={filters.mode}
+              onValueChange={(v) => filters.setMode(v as typeof filters.mode)}
+            >
+              <SelectTrigger id="pnl-mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="live">Live</SelectItem>
+                <SelectItem value="analyzer">Paper (analyzer)</SelectItem>
+                <SelectItem value="all">Live + paper</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex-1 space-y-1">
             <Label htmlFor="pnl-type">P&L</Label>
             <Select
               value={filters.pnlType}

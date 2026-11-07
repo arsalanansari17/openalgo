@@ -32,6 +32,7 @@ from services.pnl_history_service import (
     get_strategy_attribution,
     get_strategy_legs,
     import_kotak_statement,
+    add_paper_fill,
     import_trades_csv,
     set_trade_strategy,
 )
@@ -45,6 +46,7 @@ from .pnl_history_schema import (
     PnlHistorySchema,
     PnlImportSchema,
     PnlIntradaySchema,
+    PnlPaperFillSchema,
     PnlSetTradeStrategySchema,
     PnlStrategyLegsSchema,
 )
@@ -65,11 +67,13 @@ pnl_intraday_schema = PnlIntradaySchema()
 pnl_strategy_legs_schema = PnlStrategyLegsSchema()
 pnl_attribution_schema = PnlAttributionSchema()
 pnl_set_trade_strategy_schema = PnlSetTradeStrategySchema()
+pnl_paper_fill_schema = PnlPaperFillSchema()
 
 # Column-name aliases across broker tradebook CSV exports (Zerodha Console's
 # tradebook export; other brokers can be added here).
 _COLUMN_ALIASES = {
     "symbol": ("symbol", "tradingsymbol", "trdsym", "instrument"),
+    "mode": ("mode",),
     "exchange": ("exchange", "exch", "exseg"),
     "product": ("product", "prod"),
     "action": ("action", "trade_type", "transaction_type", "side", "trnstp"),
@@ -180,6 +184,7 @@ class PnlHistory(Resource):
             symbol=params.get("symbol"),
             segment=params.get("segment"),
             strategy=params.get("strategy"),
+            mode=params["mode"],
         )
         return make_response(jsonify(response_data), status_code)
 
@@ -228,7 +233,22 @@ class PnlTrades(Resource):
             symbol=params.get("symbol"),
             segment=params.get("segment"),
             strategy=params.get("strategy"),
+            mode=params["mode"],
         )
+        return make_response(jsonify(response_data), status_code)
+
+
+@api.route("/paperfill", strict_slashes=False)
+class PnlPaperFill(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    @_handle_errors
+    def post(self):
+        """Store one paper fill (mode=analyzer by default) in the P&L ledger.
+        Ledger only: nothing is sent to the broker."""
+        data = pnl_paper_fill_schema.load(request.get_json(silent=True) or {})
+        api_key = data.pop("apikey")
+        data["trade_timestamp"] = data.pop("timestamp")
+        success, response_data, status_code = add_paper_fill(api_key=api_key, fill=data)
         return make_response(jsonify(response_data), status_code)
 
 

@@ -78,8 +78,9 @@ export function usePnlAnalysisData(embedded: PnlEmbeddedFilters | null) {
         const [history, curve] = await Promise.all([
           tradingApi.getPnlHistory(apiKey, e.startDate, e.endDate, {
             segment: e.segment === 'all' ? undefined : e.segment,
+            mode: e.mode,
           }),
-          e.segment === 'equity'
+          e.segment === 'equity' && e.mode === 'live'
             ? tradingApi.getPnlCurve(apiKey, e.startDate, e.endDate, 'actual_cost', symbol)
             : Promise.resolve(null),
         ])

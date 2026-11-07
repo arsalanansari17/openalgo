@@ -322,6 +322,11 @@ class PnlTrade(Base):
     # "import" (CSV upload, backfilling history predating the capture job).
     source = Column(String(20), nullable=False, default="capture")
 
+    # "live" (a real broker fill) or "analyzer" (a paper fill, e.g. posted by
+    # the SkyShield client through POST /api/v1/pnl/paperfill). Reports filter
+    # on it and FIFO never matches a live fill against an analyzer one.
+    mode = Column(String(10), nullable=False, default="live", server_default="live", index=True)
+
     created_at = Column(DateTime, nullable=False, default=func.now())
 
     __table_args__ = (
@@ -393,6 +398,7 @@ def init_db():
     init_db_with_logging(Base, engine, "Tradebook DB", logger)
     _migrate_add_segment_column()
     _migrate_add_strategy_column()
+    _migrate_add_mode_column()
     _migrate_dedup_keys_add_trade_date()
 
 
@@ -489,6 +495,35 @@ def _migrate_add_strategy_column():
             logger.info("Added tradebook_fills.strategy")
     except Exception:
         logger.exception("Could not add tradebook_fills.strategy")
+
+
+MODES = ("live", "analyzer")
+
+
+def _migrate_add_mode_column():
+    """Add tradebook_fills.mode (live / analyzer) to a database created before
+    it existed; every existing row is a real broker fill, so it becomes "live".
+    Same pattern as _migrate_add_strategy_column().
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            existing = {
+                row[1] for row in conn.execute(text("PRAGMA table_info(tradebook_fills)"))
+            }
+            if not existing or "mode" in existing:
+                return
+            conn.execute(
+                text("ALTER TABLE tradebook_fills ADD COLUMN mode VARCHAR(10) NOT NULL DEFAULT 'live'")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_tradebook_fills_mode ON tradebook_fills(mode)")
+            )
+            conn.commit()
+            logger.info("Added tradebook_fills.mode")
+    except Exception:
+        logger.exception("Could not add tradebook_fills.mode")
 
 
 def _migrate_dedup_keys_add_trade_date():

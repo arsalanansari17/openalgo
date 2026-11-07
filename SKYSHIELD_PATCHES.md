@@ -6,6 +6,14 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-11-08 - P&L ledger: live / analyzer mode, and paper fills from the SkyShield client
+
+- **Files**: `database/pnl_db.py` (`tradebook_fills.mode` + `_migrate_add_mode_column`, `MODES`), `services/pnl_history_service.py` (`mode` filter in `_parse_range_and_build_query`, FIFO run per mode in `get_pnl_history`, `mode` on closed trades and raw fills, `add_paper_fill`, row-level `mode` / `strategy` / `source` in `_persist_import_rows`), `restx_api/pnl_history.py` + `restx_api/pnl_history_schema.py` (`mode` query param on `/history` and `/trades`, new `POST /api/v1/pnl/paperfill`, optional `mode` CSV column), frontend `PnlFilterBar.tsx` / `usePnlFilters.ts` / `usePnlAnalysisData.ts` / `api/trading.ts` (Mode select: Live / Paper (analyzer) / Live + paper, `?mode=` in the URL), `test/test_pnl_mode.py`.
+- **Problem**: acc1 now paper-trades acc4's signals (SkyShield client). Paper fills need to sit in the same reports as real ones, but always distinguishable, so live and paper results can be analysed apart later (user, 2026-11-07).
+- **Fix**: every ledger row carries `mode` (`live` default; existing rows migrate to `live`). The client posts each paper fill to `POST /api/v1/pnl/paperfill` (API key only, not the broker session; ledger row only, nothing goes to the broker; idempotent on tradeid) as `mode = analyzer`, `source = paper`, with its strategy tag. Reports take `mode=live|analyzer|all`, default `live`, so every existing view and the equity curve are unchanged; `all` matches FIFO separately per mode, so a paper fill never closes a live lot. Paper-only reports show no open positions (those come from the live broker). OpenAlgo's own analyzer (sandbox) is not used on acc1: the free Kite key has no quotes and the sandbox refuses MARKET orders without an LTP.
+- **Fork-only** (P&L History subsystem): no upstream issue.
+- **Verified on**: `test/test_pnl_mode.py` 5 pass; all `test/test_pnl*.py` + `test_kotak_positions_pnl.py` 171 pass; frontend `tsc --noEmit` clean, `PnlAnalysis` / `PnLTracker` tests 9 pass, biome clean. Not yet deployed; `frontend/dist` to be rebuilt at deploy (`git add -f -A frontend/dist`).
+
 ## 2026-10-27 - Positions: a carried Kotak leg that was exited today shows its P&L from the strategy book, not Kotak's day slice
 
 - **Files**: `frontend/src/lib/trading/strategyAttribution.ts` (`applyCostBasis`, `hasCarryForwardValuation`), `frontend/src/lib/trading/strategyAttribution.test.ts`

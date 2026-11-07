@@ -32,6 +32,11 @@ class PnlHistorySchema(Schema):
     # with no fixed enum to validate against. Omitted/empty means no
     # strategy filter.
     strategy = fields.Str(required=False, load_default=None)
+    # live = real broker fills (default, unchanged behaviour), analyzer = paper
+    # fills (e.g. the SkyShield client), all = both, FIFO-matched per mode.
+    mode = fields.Str(
+        required=False, load_default="live", validate=validate.OneOf(["live", "analyzer", "all"])
+    )
 
 
 class PnlCurveSchema(Schema):
@@ -75,6 +80,25 @@ class PnlAttributionSchema(Schema):
     # Positions only: also return today's M2M per row (needs today's trades and
     # previous closes, so it is opt-in).
     m2m = fields.Bool(required=False, load_default=False)
+
+
+class PnlPaperFillSchema(Schema):
+    """One paper fill for the ledger (POST /api/v1/pnl/paperfill). A ledger row
+    only - nothing is sent to the broker."""
+
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    tradeid = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    orderid = fields.Str(required=False, load_default=None, validate=validate.Length(max=50))
+    symbol = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    exchange = fields.Str(required=True, validate=validate.Length(min=1, max=20))
+    product = fields.Str(required=False, load_default=None, validate=validate.Length(max=20))
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL"]))
+    quantity = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
+    average_price = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
+    # "YYYY-MM-DD HH:MM:SS" (IST) or ISO 8601
+    timestamp = fields.Str(required=True, validate=validate.Length(min=10, max=40))
+    strategy = fields.Str(required=False, load_default=None, validate=validate.Length(max=120))
+    mode = fields.Str(required=False, load_default="analyzer", validate=validate.OneOf(["live", "analyzer"]))
 
 
 class PnlSetTradeStrategySchema(Schema):
