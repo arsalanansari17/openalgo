@@ -5,7 +5,7 @@ Only the two data sources are faked (the broker history service and the HTTP
 client); the bar parsing, the cache and the fallback decision run for real.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -141,7 +141,75 @@ def test_a_failing_fallback_gives_empty_and_never_raises(monkeypatch, client):
     _configure(monkeypatch, client)
 
     assert svc._daily_closes("k", "ABC", "NSE", START, END) == {}
-    assert svc._daily_close_cache.get(("ABC", "NSE", "2026-11-02", "2026-11-06")) is None
+    assert svc._daily_close_cache.get(("ABC", "NSE")) is None
+
+
+def test_fallback_first_skips_the_accounts_own_broker(monkeypatch):
+    own_calls = _own_broker(monkeypatch, (True, {"data": []}, 200))
+    client = FakeClient(FakeResponse(200, {"status": "success", "data": BARS}))
+    _configure(monkeypatch, client)
+    monkeypatch.setenv("PNL_HISTORY_FALLBACK_FIRST", "1")
+
+    assert svc._daily_closes("k", "ABC", "NSE", START, END) == EXPECTED
+    assert own_calls == []
+
+
+def test_a_wider_cached_span_serves_a_narrower_range_without_a_call(monkeypatch):
+    _own_broker(monkeypatch, (False, {"status": "error"}, 403))
+    client = FakeClient(FakeResponse(200, {"status": "success", "data": BARS}))
+    _configure(monkeypatch, client)
+
+    svc._daily_closes("k", "ABC", "NSE", START, END)
+    narrow = svc._daily_closes("k", "ABC", "NSE", date(2026, 11, 4), date(2026, 11, 5))
+
+    assert narrow == {date(2026, 11, 4): 101.5}
+    assert len(client.calls) == 1
+
+
+def test_a_range_starting_earlier_than_the_cache_refetches_the_whole_span(monkeypatch):
+    _own_broker(monkeypatch, (False, {"status": "error"}, 403))
+    client = FakeClient(FakeResponse(200, {"status": "success", "data": BARS}))
+    _configure(monkeypatch, client)
+
+    svc._daily_closes("k", "ABC", "NSE", date(2026, 11, 3), END)
+    svc._daily_closes("k", "ABC", "NSE", date(2026, 10, 1), END)
+
+    assert [c["json"]["start_date"] for c in client.calls] == ["2026-11-03", "2026-10-01"]
+
+
+def test_a_later_end_fetches_only_the_tail_and_merges(monkeypatch):
+    _own_broker(monkeypatch, (False, {"status": "error"}, 403))
+    client = FakeClient(FakeResponse(200, {"status": "success", "data": BARS}))
+    _configure(monkeypatch, client)
+    svc._daily_closes("k", "ABC", "NSE", START, date(2026, 11, 4))
+    new_bar = {"timestamp": 1793836800, "close": 102.5}  # 2026-11-05
+    client.response = FakeResponse(200, {"status": "success", "data": [new_bar]})
+
+    got = svc._daily_closes("k", "ABC", "NSE", START, date(2026, 11, 5))
+
+    assert got == {**EXPECTED, date(2026, 11, 5): 102.5}
+    assert (
+        client.calls[-1]["json"]["start_date"] == "2026-11-02"
+    )  # entry.end - 5 days, floored at entry.start
+
+
+def test_todays_bar_is_refreshed_after_the_close_but_not_while_trading(monkeypatch):
+    _own_broker(monkeypatch, (False, {"status": "error"}, 403))
+    client = FakeClient(FakeResponse(200, {"status": "success", "data": BARS}))
+    _configure(monkeypatch, client)
+    today = datetime.now(svc._IST).date()
+    svc._daily_closes("k", "ABC", "NSE", START, today)
+    assert len(client.calls) == 1
+
+    later = svc.monotonic() + 10_000  # well past the refresh interval
+    monkeypatch.setattr(svc, "monotonic", lambda: later)
+    monkeypatch.setattr(svc, "_market_is_open", lambda *a, **k: True)
+    svc._daily_closes("k", "ABC", "NSE", START, today)
+    assert len(client.calls) == 1  # market trading: cached bar kept
+
+    monkeypatch.setattr(svc, "_market_is_open", lambda *a, **k: False)
+    svc._daily_closes("k", "ABC", "NSE", START, today)
+    assert len(client.calls) == 2  # market shut and cache older than the interval
 
 
 def test_the_fallback_key_is_never_logged(monkeypatch, caplog):

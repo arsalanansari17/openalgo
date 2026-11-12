@@ -13,6 +13,7 @@ extended from one trading day to an arbitrary date range.
 
 import os
 from datetime import UTC, date, datetime, time, timedelta, timezone
+from time import monotonic
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -975,9 +976,15 @@ def set_trade_strategy(api_key: str, trade_id: int, strategy: str):
 # P&L curve: daily realized + unrealized per strategy (equity only)
 # ---------------------------------------------------------------------------
 
-# Daily closes per instrument and span, as {date: close}. Past closes never
-# change; a short TTL keeps today's bar fresh.
-_daily_close_cache = LockedTTLCache(maxsize=512, ttl=900)
+# Daily closes per instrument, in memory only: {(symbol, exchange): entry} where
+# entry = {"start", "end", "closes": {date: close}, "fetched": monotonic secs}.
+# One entry serves every range inside [start, end], so a year-to-date load fetches
+# each symbol once and later loads of any sub-range cost no broker calls. Past
+# closes never change; today's bar is refreshed once the market is shut
+# (_tail_is_stale). Held for 12 h and lost on restart: nothing is stored on disk.
+_daily_close_cache = LockedTTLCache(maxsize=1024, ttl=43200)
+_TODAY_BAR_REFRESH_SECONDS = 900
+_TAIL_REFETCH_DAYS = 5
 
 _INDEX_FOR_CALENDAR = ("NIFTY", "NSE_INDEX")
 
@@ -1047,36 +1054,83 @@ def _fallback_daily_closes(symbol: str, exchange: str, start: date, end: date):
     return _bars_to_closes(body.get("data"))
 
 
-def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: date):
-    """Daily closes for one instrument over [start, end], or {} when the broker
-    has none. Cached by span, so a re-fetch of the same page costs no broker
-    calls. When the account's own broker returns nothing, the optional fallback
-    instance (see _fallback_daily_closes) is asked.
+def _fetch_closes(api_key: str, symbol: str, exchange: str, start: date, end: date):
+    """One broker round trip: the account's own history first, then the optional
+    fallback instance (see _fallback_daily_closes). PNL_HISTORY_FALLBACK_FIRST=1
+    skips the account's own broker, for one known to have no history (a lapsed
+    Kite Connect subscription), so each symbol costs one call, not two.
     """
     from services.history_service import get_history
 
-    key = (symbol, exchange, start.isoformat(), end.isoformat())
-    cached = _daily_close_cache.get(key)
-    if cached is not None:
-        return cached
     closes = {}
-    try:
-        ok, response, _ = get_history(
-            symbol=symbol,
-            exchange=exchange,
-            interval="D",
-            start_date=start.isoformat(),
-            end_date=end.isoformat(),
-            api_key=api_key,
-        )
-        closes = _bars_to_closes(response.get("data")) if ok else {}
-    except Exception:
-        logger.exception(f"Daily history failed for {exchange}:{symbol}")
+    if os.getenv("PNL_HISTORY_FALLBACK_FIRST") != "1":
+        try:
+            ok, response, _ = get_history(
+                symbol=symbol,
+                exchange=exchange,
+                interval="D",
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+                api_key=api_key,
+            )
+            closes = _bars_to_closes(response.get("data")) if ok else {}
+        except Exception:
+            logger.exception(f"Daily history failed for {exchange}:{symbol}")
     if not closes:
         closes = _fallback_daily_closes(symbol, exchange, start, end)
-    if closes:
-        _daily_close_cache[key] = closes
     return closes
+
+
+def _tail_is_stale(entry: dict, end: date) -> bool:
+    """True when a range reaching today was cached before the market shut and is
+    older than the refresh interval, so the final bar of today must be fetched.
+    While the market trades, the cached bar is kept: live quotes price open lots
+    then, and a 100-symbol refetch would outlast the caller's timeout."""
+    if end < datetime.now(_IST).date() or _market_is_open():
+        return False
+    return monotonic() - entry["fetched"] > _TODAY_BAR_REFRESH_SECONDS
+
+
+def _slice_closes(closes: dict, start: date, end: date) -> dict:
+    return {d: c for d, c in closes.items() if start <= d <= end}
+
+
+def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: date):
+    """Daily closes for one instrument over [start, end], or {} when no source
+    has any. Served from the in-memory per-instrument cache when it covers the
+    range; otherwise only what is missing is fetched (the whole span when it
+    starts earlier than the cache, the last few days when it ends later).
+    """
+    key = (symbol, exchange)
+    entry = _daily_close_cache.get(key)
+
+    if entry and entry["start"] <= start:
+        if entry["end"] >= end and not _tail_is_stale(entry, end):
+            return _slice_closes(entry["closes"], start, end)
+        tail_start = max(entry["start"], entry["end"] - timedelta(days=_TAIL_REFETCH_DAYS))
+        fetched = _fetch_closes(api_key, symbol, exchange, tail_start, end)
+        if not fetched:
+            return _slice_closes(entry["closes"], start, end)
+        merged = {**entry["closes"], **fetched}
+        _daily_close_cache[key] = {
+            "start": entry["start"],
+            "end": max(entry["end"], end),
+            "closes": merged,
+            "fetched": monotonic(),
+        }
+        return _slice_closes(merged, start, end)
+
+    fetched = _fetch_closes(api_key, symbol, exchange, start, end)
+    if not fetched:
+        return {}
+    merged = {**entry["closes"], **fetched} if entry else fetched
+    _daily_close_cache[key] = {
+        "start": start,
+        "end": max(entry["end"], end) if entry else end,
+        "closes": merged,
+        "fetched": monotonic(),
+    }
+    return _slice_closes(merged, start, end)
 
 
 def get_pnl_curve(
