@@ -5,6 +5,8 @@ Only the two data sources are faked (the broker history service and the HTTP
 client); the bar parsing, the cache and the fallback decision run for real.
 """
 
+import threading
+import time
 from datetime import date, datetime
 
 import pytest
@@ -220,3 +222,68 @@ def test_the_fallback_key_is_never_logged(monkeypatch, caplog):
         svc._daily_closes("k", "ABC", "NSE", START, END)
 
     assert "secret-key" not in caplog.text
+
+
+def test_two_requests_for_one_instrument_make_one_broker_call(monkeypatch):
+    """A retry that arrives while the first request is still fetching waits for
+    it and reads the cache, instead of repeating the broker call."""
+    calls = []
+
+    def slow_broker(**kwargs):
+        calls.append(kwargs)
+        time.sleep(0.2)
+        return True, {"data": BARS}, 200
+
+    monkeypatch.setattr(history_service, "get_history", slow_broker)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(svc._daily_closes("k", "ABC", "NSE", START, END)))
+        for _ in range(4)
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    assert len(calls) == 1
+    assert results == [EXPECTED] * 4
+
+
+def test_prefetch_fills_the_cache_for_every_instrument_concurrently(monkeypatch):
+    seen = []
+    lock = threading.Lock()
+    inflight = {"now": 0, "peak": 0}
+
+    def broker(**kwargs):
+        with lock:
+            inflight["now"] += 1
+            inflight["peak"] = max(inflight["peak"], inflight["now"])
+        time.sleep(0.1)
+        with lock:
+            inflight["now"] -= 1
+            seen.append(kwargs["symbol"])
+        return True, {"data": BARS}, 200
+
+    monkeypatch.setattr(history_service, "get_history", broker)
+    wanted = [(f"S{i}", "NSE") for i in range(8)]
+
+    svc._prefetch_closes("k", wanted, START, END)
+
+    assert sorted(seen) == sorted(s for s, _ in wanted)
+    assert inflight["peak"] > 1  # not one at a time
+    assert inflight["peak"] <= 4  # and bounded
+    for symbol, exchange in wanted:
+        assert svc._daily_close_cache.get((symbol, exchange)) is not None
+
+
+def test_one_failing_instrument_does_not_stop_the_prefetch(monkeypatch):
+    def broker(**kwargs):
+        if kwargs["symbol"] == "BAD":
+            raise RuntimeError("boom")
+        return True, {"data": BARS}, 200
+
+    monkeypatch.setattr(history_service, "get_history", broker)
+
+    svc._prefetch_closes("k", [("BAD", "NSE"), ("GOOD", "NSE")], START, END)
+
+    assert svc._daily_close_cache.get(("GOOD", "NSE")) is not None

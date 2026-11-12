@@ -12,6 +12,7 @@ extended from one trading day to an arbitrary date range.
 """
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from time import monotonic
 from types import SimpleNamespace
@@ -34,6 +35,7 @@ from database.pnl_db import (
 from database.strategy_book_db import StrategyBookUnavailable, get_order_tag
 from services.pnl_curve import VALID_BASES, build_curve, symbols_needing_closes
 from utils.httpx_client import get_httpx_client
+from utils.keyed_locks import KeyedLocks
 from utils.kotak_statement import normalize_company_name, normalize_statement_row
 from utils.logging import get_logger
 from utils.pnl_fifo import compute_realized_pnl, summarize_by_day
@@ -983,6 +985,12 @@ def set_trade_strategy(api_key: str, trade_id: int, strategy: str):
 # closes never change; today's bar is refreshed once the market is shut
 # (_tail_is_stale). Held for 12 h and lost on restart: nothing is stored on disk.
 _daily_close_cache = LockedTTLCache(maxsize=1024, ttl=43200)
+# Per-instrument single flight, and the small shared pool that fills the cache
+# in parallel (green threads under eventlet, so a broker wait yields).
+_CLOSES_LOCKS = KeyedLocks(name="pnl-daily-closes")
+_CLOSES_POOL = ThreadPoolExecutor(
+    max_workers=int(os.getenv("PNL_CLOSES_WORKERS", "4")), thread_name_prefix="pnl-closes"
+)
 _TODAY_BAR_REFRESH_SECONDS = 900
 _TAIL_REFETCH_DAYS = 5
 
@@ -1097,10 +1105,36 @@ def _slice_closes(closes: dict, start: date, end: date) -> dict:
 
 def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: date):
     """Daily closes for one instrument over [start, end], or {} when no source
-    has any. Served from the in-memory per-instrument cache when it covers the
-    range; otherwise only what is missing is fetched (the whole span when it
-    starts earlier than the cache, the last few days when it ends later).
+    has any. One fetch per instrument at a time: a request that arrives while
+    another is fetching the same instrument waits and then reads the cache, so a
+    caller that timed out and retried (its first request keeps running here)
+    does not repeat the broker calls the first one is still making.
     """
+    with _CLOSES_LOCKS.hold((symbol, exchange)):
+        return _daily_closes_locked(api_key, symbol, exchange, start, end)
+
+
+def _prefetch_closes(api_key: str, wanted, start: date, end: date) -> None:
+    """Fill the cache for every wanted instrument, a few at a time. Each broker
+    round trip is a second or more, and a book of several hundred symbols takes
+    half an hour one by one. Results are read back from the cache by the caller;
+    a failed instrument is simply left to the caller's own (serial) lookup."""
+    futures = [
+        _CLOSES_POOL.submit(_daily_closes, api_key, symbol, exchange, start, end)
+        for symbol, exchange in wanted
+    ]
+    for future in futures:
+        try:
+            future.result()
+        except Exception:
+            logger.exception("Prefetching daily closes failed for one instrument")
+
+
+def _daily_closes_locked(api_key: str, symbol: str, exchange: str, start: date, end: date):
+    """The body of _daily_closes, run under the instrument's lock. Served from
+    the in-memory cache when it covers the range; otherwise only what is
+    missing is fetched (the whole span when it starts earlier than the cache,
+    the last few days when it ends later)."""
     key = (symbol, exchange)
     entry = _daily_close_cache.get(key)
 
@@ -1211,7 +1245,9 @@ def get_pnl_curve(
     closes = {}
     if trading_dates:
         span_start = base_date or start
-        for symbol, exchange in sorted(symbols_needing_closes(fills, span_start, end)):
+        wanted = sorted(symbols_needing_closes(fills, span_start, end))
+        _prefetch_closes(api_key, wanted, span_start, end)
+        for symbol, exchange in wanted:
             got = _daily_closes(api_key, symbol, exchange, span_start, end)
             if got:
                 closes[(symbol, exchange)] = got
