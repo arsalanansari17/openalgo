@@ -11,6 +11,7 @@ explicit design call - "this is how zerodha or broker would be doing" -
 extended from one trading day to an arbitrary date range.
 """
 
+import os
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -31,6 +32,7 @@ from database.pnl_db import (
 )
 from database.strategy_book_db import StrategyBookUnavailable, get_order_tag
 from services.pnl_curve import VALID_BASES, build_curve, symbols_needing_closes
+from utils.httpx_client import get_httpx_client
 from utils.kotak_statement import normalize_company_name, normalize_statement_row
 from utils.logging import get_logger
 from utils.pnl_fifo import compute_realized_pnl, summarize_by_day
@@ -998,10 +1000,58 @@ def _bars_to_closes(records) -> dict[date, float]:
     return out
 
 
+_FALLBACK_TIMEOUT_SECONDS = 15
+
+
+def _fallback_daily_closes(symbol: str, exchange: str, start: date, end: date):
+    """Daily closes from another OpenAlgo instance whose broker still serves
+    history, or {} when no fallback is configured or it has none.
+
+    For an account whose own broker cannot return daily history (Zerodha
+    without the paid Kite Connect subscription, or a lapsed session), so its
+    P&L curve is not left unvalued. Opt-in: both PNL_HISTORY_FALLBACK_URL (base
+    URL of the other instance) and PNL_HISTORY_FALLBACK_API_KEY (an API key
+    on it) must be set. Prices are exchange data, so any broker's daily bars
+    for the same symbol are the same. Nothing is stored beyond the usual
+    in-memory span cache.
+    """
+    base_url = (os.getenv("PNL_HISTORY_FALLBACK_URL") or "").strip().rstrip("/")
+    fallback_key = (os.getenv("PNL_HISTORY_FALLBACK_API_KEY") or "").strip()
+    if not base_url or not fallback_key:
+        return {}
+    try:
+        response = get_httpx_client().post(
+            f"{base_url}/api/v1/history",
+            json={
+                "apikey": fallback_key,
+                "symbol": symbol,
+                "exchange": exchange,
+                "interval": "D",
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+            },
+            timeout=_FALLBACK_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200:
+            logger.warning(
+                f"Fallback daily history for {exchange}:{symbol} answered {response.status_code}"
+            )
+            return {}
+        body = response.json()
+    except Exception:
+        # Never log the request: it carries the fallback API key.
+        logger.exception(f"Fallback daily history failed for {exchange}:{symbol}")
+        return {}
+    if not isinstance(body, dict) or body.get("status") != "success":
+        return {}
+    return _bars_to_closes(body.get("data"))
+
+
 def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: date):
     """Daily closes for one instrument over [start, end], or {} when the broker
     has none. Cached by span, so a re-fetch of the same page costs no broker
-    calls.
+    calls. When the account's own broker returns nothing, the optional fallback
+    instance (see _fallback_daily_closes) is asked.
     """
     from services.history_service import get_history
 
@@ -1009,6 +1059,7 @@ def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: da
     cached = _daily_close_cache.get(key)
     if cached is not None:
         return cached
+    closes = {}
     try:
         ok, response, _ = get_history(
             symbol=symbol,
@@ -1018,10 +1069,11 @@ def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: da
             end_date=end.isoformat(),
             api_key=api_key,
         )
+        closes = _bars_to_closes(response.get("data")) if ok else {}
     except Exception:
         logger.exception(f"Daily history failed for {exchange}:{symbol}")
-        return {}
-    closes = _bars_to_closes(response.get("data")) if ok else {}
+    if not closes:
+        closes = _fallback_daily_closes(symbol, exchange, start, end)
     if closes:
         _daily_close_cache[key] = closes
     return closes

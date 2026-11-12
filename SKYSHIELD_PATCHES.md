@@ -6,6 +6,16 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-11-12 - P&L curve / unrealized: daily closes fall back to another OpenAlgo instance when the account's own broker has no history
+
+- **Files**: `services/pnl_history_service.py` (`_fallback_daily_closes`, `_daily_closes`, `import os`, `get_httpx_client`), `test/test_pnl_history_fallback.py` (new, 10 cases)
+- **Problem**: the Zerodha Kite Connect API subscription was cancelled for acc1 and acc2, so their broker returns no daily history. `/pnl/curve` and `/pnl/history` value open lots from the broker's daily closes on every call (nothing is stored), so those accounts' unrealized P&L and curve came back unvalued (`missing_close`) and AlgoMirror's combined Equity P&L Analysis read about 1 lakh too low (user, 2026-11-12).
+- **Fix**: when the account's own `get_history` returns nothing (or raises), `_daily_closes` asks a fallback instance, `POST {PNL_HISTORY_FALLBACK_URL}/api/v1/history` with `PNL_HISTORY_FALLBACK_API_KEY`, 15 s timeout, shared httpx client. Opt-in: both env vars must be set, so every account without them behaves exactly as before. Daily prices are exchange data, so any broker's bars serve. A failing fallback returns `{}` (the existing `missing_close` note) and never raises; the key is never logged. Nothing is persisted (user, 2026-11-12: no stored history for now); the existing 15-minute in-memory span cache applies.
+- **Fork-only** (P&L History subsystem): no upstream issue.
+- **Verified on**: `test/test_pnl_history_fallback.py` 10 pass; all `test/test_pnl*.py` + `test_kotak_positions_pnl.py` 181 pass; ruff check clean. **Not deployed.** Deploy plan: set the two env vars in acc1's `.env` only (fallback = a Kotak instance with a daily login, acc4 or acc3 with an API key made for this; acc4 is up 08:00-16:15 IST), pull fork `main` to acc1, restart, then confirm `missing_close` is empty on the P&L curve.
+
+---
+
 ## 2026-11-08 - P&L ledger: live / analyzer mode, and paper fills from the SkyShield client
 
 - **Files**: `database/pnl_db.py` (`tradebook_fills.mode` + `_migrate_add_mode_column`, `MODES`), `services/pnl_history_service.py` (`mode` filter in `_parse_range_and_build_query`, FIFO run per mode in `get_pnl_history`, `mode` on closed trades and raw fills, `add_paper_fill`, row-level `mode` / `strategy` / `source` in `_persist_import_rows`), `restx_api/pnl_history.py` + `restx_api/pnl_history_schema.py` (`mode` query param on `/history` and `/trades`, new `POST /api/v1/pnl/paperfill`, optional `mode` CSV column), frontend `PnlFilterBar.tsx` / `usePnlFilters.ts` / `usePnlAnalysisData.ts` / `api/trading.ts` (Mode select: Live / Paper (analyzer) / Live + paper, `?mode=` in the URL), `test/test_pnl_mode.py`.
@@ -22,7 +32,7 @@ verify in production, then PR upstream.
 - **Also**: `Positions.tsx` marks the P&L cell of a row still on Kotak's carry valuation (`*` and a tooltip), so a figure the book could not correct is not read as the result since entry.
 - **Not covered**: `frontend/dist` not rebuilt and nothing deployed. A leg whose close the book never saw (no slice) keeps Kotak's figure.
 - **Upstream**: stacked on the carried-average work in draft PR #2202 (frontend only); fold into it when #2181 merges.
-- **Verified on**: `strategyAttribution.test.ts` (36 pass), `tsc --noEmit` clean. AlgoMirror has the same fix (`app/utils/position_cost_basis.py`, 10 tests).
+- **Verified on**: `strategyAttribution.test.ts` (36 pass), `tsc --noEmit` clean. AlgoMirror has the same fix (`app/utils/position_cost_basis.py`, 10 tests); full frontend suite 1,284 pass after `npm ci` (the 20 earlier failures were a stale openalgo-charts 2.6.0 install). Deployed 2026-10-28 15:41-15:55 IST to acc3, acc4, acc5 at fork main `1aabf17e3` (pull only, no restart; dist has 0 missing files, index assets served 200 on all three; SkyShieldAT sanity 0 failed: acc3 38 passed/2 warnings, acc4 and acc5 39 passed/1 warning). **Not deployed to acc1/acc2** (still `9a18d2825`): disks at 97%/99%, and Zerodha rows are never flagged, so the change does nothing there. **Lesson**: `frontend/dist/` is gitignored, so `git add -A frontend/dist` skips new hashed bundles - commit `e7d2b38a6` shipped an `index.html` pointing at missing assets (acc3 was broken for ~3 minutes after market close until `1aabf17e3` added them with `git add -f`). Always `git add -f -A frontend/dist` and check every asset in `index.html` is tracked.
 
 ## 2026-10-24 - P&L unrealized: open lots priced at the last daily close when the market is shut, not at a quote
 
