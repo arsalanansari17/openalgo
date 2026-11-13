@@ -68,9 +68,14 @@ def _price_exchange(by_symbol: dict[str, str], fill: dict) -> str:
     return by_symbol.get(fill["symbol"], fill["exchange"])
 
 
-def symbols_needing_closes(fills: list[dict], base_date: date, end: date) -> set[tuple]:
-    """(symbol, exchange) pairs that are held at the close of at least one day
-    in [base_date, end]. Only these need a daily close from the broker.
+def closes_needed_spans(
+    fills: list[dict], base_date: date, end: date
+) -> dict[tuple, tuple[date, date]]:
+    """{(symbol, exchange): (first, last)} - the days between which a daily close
+    is needed, for every instrument held at the close of at least one day in
+    [base_date, end]. Outside its span an instrument is never priced, so a closed
+    position needs only the days it was held and never a fresh bar again; only an
+    open one reaches `end`.
 
     `fills` must be in time order. A fill is signed by action; a position that
     is flat at every close inside the range is never priced.
@@ -83,7 +88,7 @@ def symbols_needing_closes(fills: list[dict], base_date: date, end: date) -> set
             (_day(fill["timestamp"]), sign * float(fill.get("quantity") or 0))
         )
 
-    needed = set()
+    spans: dict[tuple, tuple[date, date]] = {}
     for key, items in per_key.items():
         net = 0.0
         i = 0
@@ -98,9 +103,15 @@ def symbols_needing_closes(fills: list[dict], base_date: date, end: date) -> set
             lo = max(day, base_date)
             hi = end if following is None else min(end, following - timedelta(days=1))
             if lo <= hi:
-                needed.add(key)
-                break
-    return needed
+                first, last = spans.get(key, (lo, hi))
+                spans[key] = (min(first, lo), max(last, hi))
+    return spans
+
+
+def symbols_needing_closes(fills: list[dict], base_date: date, end: date) -> set[tuple]:
+    """(symbol, exchange) pairs that are held at the close of at least one day
+    in [base_date, end]. Only these need a daily close from the broker."""
+    return set(closes_needed_spans(fills, base_date, end))
 
 
 def _close_on(closes: dict[date, float], day: date, history: list[date]) -> float | None:

@@ -6,6 +6,16 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-11-13 - P&L curve: a daily close is asked only for the days a position was held
+
+- **Files**: `services/pnl_curve.py` (`closes_needed_spans`, `symbols_needing_closes` now a wrapper), `services/pnl_history_service.py` (`get_pnl_curve`, `_prefetch_closes`, `_span_range`), `test/test_pnl_curve.py` (+2), `test/test_pnl_history_fallback.py` (19 cases)
+- **Problem**: the curve asked every instrument for the whole range (2025-04-01 to today), 456 symbols on acc1, though a closed position needs prices only for the days it was open. That made each cold load about 30 minutes and, once the fallback is a stored price table, would have stored and re-fetched far more than needed.
+- **Fix**: `closes_needed_spans` returns, per instrument, the first and last day it is held at a close; `get_pnl_curve` asks for exactly that span plus 5 days before it (so a day without a bar can carry the last close forward). A closed position's span ends at its exit, so it is asked once and never again; only an open position reaches today. The earlier 2026-11-12 changes stay: per-instrument single flight and a 4-worker parallel prefetch (`PNL_CLOSES_WORKERS`). The boot-time warm-up (`pnl-prewarm.service`) was removed: it sent about 456 history calls to the live trading account at every boot. The fallback target becomes AlgoMirror's shared price store (`POST /prices/api/v1/history`, same body and shape), which never calls a broker; AlgoMirror fills it after 15:40 IST.
+- **Fork-only** (P&L History subsystem): no upstream issue.
+- **Verified on**: all `test/test_pnl*.py` 264 pass, ruff clean. Not yet deployed.
+
+---
+
 ## 2026-11-12 - P&L curve / unrealized: daily closes fall back to another OpenAlgo instance when the account's own broker has no history
 
 - **Files**: `services/pnl_history_service.py` (`_fallback_daily_closes`, `_daily_closes`, `import os`, `get_httpx_client`), `test/test_pnl_history_fallback.py` (new, 18 cases)

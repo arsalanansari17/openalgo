@@ -267,7 +267,7 @@ def test_prefetch_fills_the_cache_for_every_instrument_concurrently(monkeypatch)
     monkeypatch.setattr(history_service, "get_history", broker)
     wanted = [(f"S{i}", "NSE") for i in range(8)]
 
-    svc._prefetch_closes("k", wanted, START, END)
+    svc._prefetch_closes("k", dict.fromkeys(wanted, (START, END)))
 
     assert sorted(seen) == sorted(s for s, _ in wanted)
     assert inflight["peak"] > 1  # not one at a time
@@ -284,6 +284,27 @@ def test_one_failing_instrument_does_not_stop_the_prefetch(monkeypatch):
 
     monkeypatch.setattr(history_service, "get_history", broker)
 
-    svc._prefetch_closes("k", [("BAD", "NSE"), ("GOOD", "NSE")], START, END)
+    svc._prefetch_closes("k", {("BAD", "NSE"): (START, END), ("GOOD", "NSE"): (START, END)})
 
     assert svc._daily_close_cache.get(("GOOD", "NSE")) is not None
+
+
+def test_prefetch_asks_each_instrument_for_its_own_span_with_a_lead_in(monkeypatch):
+    seen = {}
+
+    def broker(**kwargs):
+        seen[kwargs["symbol"]] = (kwargs["start_date"], kwargs["end_date"])
+        return True, {"data": BARS}, 200
+
+    monkeypatch.setattr(history_service, "get_history", broker)
+
+    svc._prefetch_closes(
+        "k",
+        {
+            ("SHORT", "NSE"): (date(2026, 11, 10), date(2026, 11, 12)),
+            ("LONG", "NSE"): (date(2026, 11, 3), date(2026, 11, 20)),
+        },
+    )
+
+    assert seen["SHORT"] == ("2026-11-05", "2026-11-12")
+    assert seen["LONG"] == ("2026-10-29", "2026-11-20")

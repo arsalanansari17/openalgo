@@ -33,7 +33,7 @@ from database.pnl_db import (
     parse_trade_timestamp,
 )
 from database.strategy_book_db import StrategyBookUnavailable, get_order_tag
-from services.pnl_curve import VALID_BASES, build_curve, symbols_needing_closes
+from services.pnl_curve import VALID_BASES, build_curve, closes_needed_spans
 from utils.httpx_client import get_httpx_client
 from utils.keyed_locks import KeyedLocks
 from utils.kotak_statement import normalize_company_name, normalize_statement_row
@@ -1114,14 +1114,25 @@ def _daily_closes(api_key: str, symbol: str, exchange: str, start: date, end: da
         return _daily_closes_locked(api_key, symbol, exchange, start, end)
 
 
-def _prefetch_closes(api_key: str, wanted, start: date, end: date) -> None:
-    """Fill the cache for every wanted instrument, a few at a time. Each broker
-    round trip is a second or more, and a book of several hundred symbols takes
-    half an hour one by one. Results are read back from the cache by the caller;
-    a failed instrument is simply left to the caller's own (serial) lookup."""
+# A close is also needed for a few days before a span opens, so a day the
+# instrument did not trade (a suspension) can carry the last known close forward.
+_SPAN_LEAD_DAYS = 5
+
+
+def _span_range(span: tuple[date, date]) -> tuple[date, date]:
+    first, last = span
+    return first - timedelta(days=_SPAN_LEAD_DAYS), last
+
+
+def _prefetch_closes(api_key: str, spans: dict) -> None:
+    """Fill the cache for every instrument over its own span, a few at a time.
+    Each broker round trip is a second or more, and a book of several hundred
+    symbols takes half an hour one by one. Results are read back from the cache
+    by the caller; a failed instrument is simply left to the caller's own
+    (serial) lookup."""
     futures = [
-        _CLOSES_POOL.submit(_daily_closes, api_key, symbol, exchange, start, end)
-        for symbol, exchange in wanted
+        _CLOSES_POOL.submit(_daily_closes, api_key, symbol, exchange, *_span_range(span))
+        for (symbol, exchange), span in spans.items()
     ]
     for future in futures:
         try:
@@ -1245,10 +1256,10 @@ def get_pnl_curve(
     closes = {}
     if trading_dates:
         span_start = base_date or start
-        wanted = sorted(symbols_needing_closes(fills, span_start, end))
-        _prefetch_closes(api_key, wanted, span_start, end)
-        for symbol, exchange in wanted:
-            got = _daily_closes(api_key, symbol, exchange, span_start, end)
+        spans = closes_needed_spans(fills, span_start, end)
+        _prefetch_closes(api_key, spans)
+        for (symbol, exchange), span in sorted(spans.items()):
+            got = _daily_closes(api_key, symbol, exchange, *_span_range(span))
             if got:
                 closes[(symbol, exchange)] = got
 

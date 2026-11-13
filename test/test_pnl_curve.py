@@ -5,7 +5,7 @@ Days: Mon 4 May 2026 is the base (last day before the range), the range is
 Tue 5 May .. Fri 8 May.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -13,6 +13,7 @@ from services.pnl_curve import (
     BASIS_ACTUAL_COST,
     BASIS_RANGE_START,
     build_curve,
+    closes_needed_spans,
     symbols_needing_closes,
 )
 
@@ -155,6 +156,35 @@ def test_symbols_needing_closes_skips_flat_positions():
     ]
     needed = symbols_needing_closes(fills, BASE, DAYS[-1])
     assert needed == {("HELD", "NSE")}
+
+
+def test_closes_needed_spans_cover_only_the_days_a_position_is_held():
+    fills = [
+        fill("BUY", 10, 100, DAYS[1], symbol="CLOSED"),
+        fill("SELL", 10, 110, DAYS[3], symbol="CLOSED"),  # held at the close of DAYS[1..2]
+        fill("BUY", 10, 100, DAYS[2], symbol="OPEN"),  # still held at the end
+        fill("BUY", 10, 100, date(2026, 4, 1), symbol="CARRIED"),  # opened before the range
+    ]
+
+    spans = closes_needed_spans(fills, BASE, DAYS[-1])
+
+    assert spans[("CLOSED", "NSE")] == (DAYS[1], DAYS[3] - timedelta(days=1))
+    assert spans[("OPEN", "NSE")] == (DAYS[2], DAYS[-1])
+    assert spans[("CARRIED", "NSE")] == (BASE, DAYS[-1])
+
+
+def test_a_symbol_held_twice_gets_one_span_from_the_first_to_the_last_day():
+    fills = [
+        fill("BUY", 10, 100, DAYS[0], symbol="TWICE"),
+        fill("SELL", 10, 105, DAYS[1], symbol="TWICE"),
+        fill("BUY", 10, 100, DAYS[3], symbol="TWICE"),
+        fill("SELL", 10, 105, date(2026, 5, 11), symbol="TWICE"),
+    ]
+
+    spans = closes_needed_spans(fills, BASE, date(2026, 5, 12))
+
+    # first stretch is held only at the close of DAYS[0]; the second runs to the day before the sell
+    assert spans[("TWICE", "NSE")] == (DAYS[0], date(2026, 5, 10))
 
 
 def test_same_day_sell_then_buy_is_an_intraday_short_and_leaves_nothing_open():
