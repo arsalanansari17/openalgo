@@ -6,13 +6,24 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-11-16 - acc2 archived: ledger served by a read-only OpenAlgo copy on the acc1 VM
+
+- **Files**: no OpenAlgo source change. New on acc1: `/var/python/openalgo-archive-acc2/openalgo/` (code from `09708cf8d` via `git archive`, acc2's `db/openalgo.db` + `db/tradebook.db` copied with the SQLite backup API, acc2's `.env` with ports changed), `/etc/systemd/system/openalgo-archive-acc2.service` (127.0.0.1:5001, eventlet, `MemoryMax=700M`, starts with acc1, shares acc1's venv). AlgoMirror's acc2 account `host_url` is now `http://127.0.0.1:5001` (DB backup `/var/tmp/algomirror-bak-20261113/algomirror.db.pre-acc2-archive`).
+- **Problem**: acc2's Zerodha API subscription was cancelled and its VM was to be deleted, but the combined P&L pages call every account's OpenAlgo, so the page reported "Could not fetch data for: iram" and left acc2 out of the totals.
+- **Fix**: the combined pages need no code change; acc2 is just another OpenAlgo host, and its copy values lots from the shared AlgoMirror price store (`PNL_HISTORY_FALLBACK_*`, same key as acc1). The copy cannot reach a broker or message anyone: `BROKER_API_KEY/SECRET` replaced with `ARCHIVE_NO_BROKER`, the `auth` row replaced with a dummy token (OpenAlgo needs one `auth` row to accept the API key), Telegram bot and WhatsApp deactivated with the token cleared, saved sessions and the `pnl_daily_capture` job removed, WebSocket/ZMQ on 127.0.0.1 ports 8766/5556. Ports 5001/8766/5556 must stay free on acc1.
+- **Data repair done with it**: LTIM, SGLTL, SMLISUZU and HEG closes loaded once into the store from NSE's public daily files for the days held (the broker master contract no longer knows them); TATASTLBSL (merged into Tata Steel 15:1, stale 2021 lot with no ledger conversion) is left unpriced and noted in `price_symbols`.
+- **Rollback / safety**: GCP snapshot `iram-skyshield-final-20261116` (deleted later the same day by decision), local copy `C:/Users/Arsalan/SkyShieldBackups/acc2-20261116/acc2arch.tgz` (both DBs + `.env`). The acc2 VM and its static IP were deleted 2026-11-16.
+- **Fork-only** (P&L History subsystem): no upstream issue.
+- **Verified on**: acc2's own API vs the archive for the same ledger: 3,580 fills, 1,422 closed trades identical on every shared field, `total_realized_pnl` -427,494.39 (2026-01-01 to 2026-11-16) and -206,140.14 (from 2026-05-05), daily series and counts equal; only the newer `mode` field differs. Combined analysis over all five accounts returns no failed accounts for both ranges; the archive curve from 2026-05-05 has 134 days, no `missing_close`, no `missing_base`.
+- **Not automated**: Cloudflare DNS and nginx for `acc2.skyshieldedge.com`, and the Kite API app: see `Algomirror/TODO.md`.
+
 ## 2026-11-13 - P&L curve: a daily close is asked only for the days a position was held
 
 - **Files**: `services/pnl_curve.py` (`closes_needed_spans`, `symbols_needing_closes` now a wrapper), `services/pnl_history_service.py` (`get_pnl_curve`, `_prefetch_closes`, `_span_range`), `test/test_pnl_curve.py` (+2), `test/test_pnl_history_fallback.py` (19 cases)
 - **Problem**: the curve asked every instrument for the whole range (2025-04-01 to today), 456 symbols on acc1, though a closed position needs prices only for the days it was open. That made each cold load about 30 minutes and, once the fallback is a stored price table, would have stored and re-fetched far more than needed.
 - **Fix**: `closes_needed_spans` returns, per instrument, the first and last day it is held at a close; `get_pnl_curve` asks for exactly that span plus 5 days before it (so a day without a bar can carry the last close forward). A closed position's span ends at its exit, so it is asked once and never again; only an open position reaches today. The earlier 2026-11-12 changes stay: per-instrument single flight and a 4-worker parallel prefetch (`PNL_CLOSES_WORKERS`). The boot-time warm-up (`pnl-prewarm.service`) was removed: it sent about 456 history calls to the live trading account at every boot. The fallback target becomes AlgoMirror's shared price store (`POST /prices/api/v1/history`, same body and shape), which never calls a broker; AlgoMirror fills it after 15:40 IST.
 - **Fork-only** (P&L History subsystem): no upstream issue.
-- **Verified on**: all `test/test_pnl*.py` 264 pass, ruff clean. Not yet deployed.
+- **Verified on**: all `test/test_pnl*.py` 264 pass, ruff clean. Deployed to acc1 on 2026-11-13 (commit `09708cf8d`) with `PNL_HISTORY_FALLBACK_URL=https://trade.skyshieldedge.com/prices`, its own key, `PNL_HISTORY_FALLBACK_FIRST=1`. After the first backfill (126 wishes: 119 stored, 7 with no data) acc1's curve loads in 3 s. `pnl-prewarm.service` and its script were deleted from acc1. Also deployed 2026-11-14 to acc3 and acc5 (fast-forward 926e85510 to 09708cf8d, same URL and key, FIRST=1, service restarted). acc2 was archived instead (see 2026-11-16); acc4 is the source account, not pointed at the store.
 
 ---
 
