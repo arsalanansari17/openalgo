@@ -1178,6 +1178,46 @@ def _daily_closes_locked(api_key: str, symbol: str, exchange: str, start: date, 
     return _slice_closes(merged, start, end)
 
 
+def _price_today(api_key: str, closes: dict, spans: dict, today: date) -> None:
+    """Give every lot still held today a price for today, in place.
+
+    The curve reads one close per day and, for a day with no bar, carries the
+    previous close forward. Daily history has no bar for today while the market
+    trades (and a cached partial bar goes stale), so unrealized P&L for today
+    was silently valued at yesterday's close: on acc4, 2026-11-17, five lots
+    worth +9,042 showed -372. While the market trades every held instrument is
+    priced at its live quote; once it is shut only an instrument whose bar for
+    today is missing is (the bar is the close, and Kotak's quotes are not
+    trusted after hours, see _live_open_rows). A quote that cannot be read
+    leaves the carried-forward close, as before.
+    """
+    open_now = _market_is_open()
+    wanted = [
+        key
+        for key, span in spans.items()
+        if span[1] >= today and (open_now or today not in closes.get(key, {}))
+    ]
+    if not wanted:
+        return
+    try:
+        from services.quotes_service import get_multiquotes
+
+        ok, quotes, _status = get_multiquotes(
+            [{"symbol": sym, "exchange": exch} for sym, exch in wanted], api_key=api_key
+        )
+    except Exception:
+        logger.exception("Could not read live quotes to price today in the P&L curve")
+        return
+    if not ok:
+        return
+    for item in quotes.get("results", []):
+        quote = item.get("data")
+        key = (item.get("symbol"), item.get("exchange"))
+        if key in spans and isinstance(quote, dict) and quote.get("ltp"):
+            # A new dict: the one in `closes` may be the shared cache's own.
+            closes[key] = {**closes.get(key, {}), today: float(quote["ltp"])}
+
+
 def get_pnl_curve(
     api_key: str,
     start_date: str,
@@ -1262,6 +1302,8 @@ def get_pnl_curve(
             got = _daily_closes(api_key, symbol, exchange, *_span_range(span))
             if got:
                 closes[(symbol, exchange)] = got
+        if trading_dates[-1] == datetime.now(_IST).date():
+            _price_today(api_key, closes, spans, trading_dates[-1])
 
     result = build_curve(fills, closes, trading_dates, base_date, basis)
     if calendar_note:

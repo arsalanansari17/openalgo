@@ -125,6 +125,66 @@ def test_weekdays_are_used_when_the_broker_has_no_index_history(ledger, monkeypa
     assert "calendar" in body["data"]["notes"]
 
 
+def _today_setup(ledger, monkeypatch, open_now, bar_for_today):
+    from datetime import timedelta
+
+    today = datetime.now(svc._IST).date()
+    while today.weekday() >= 5:
+        today -= timedelta(days=1)
+    prev = today - timedelta(days=1)
+    while prev.weekday() >= 5:
+        prev -= timedelta(days=1)
+    ledger.add_all(
+        [_row(1, "BUY", 10, 100, datetime.combine(prev, datetime.min.time()).replace(hour=15))]
+    )
+    ledger.commit()
+    abc = {prev: 105.0}
+    if bar_for_today:
+        abc[today] = 130.0
+    _fake_closes(
+        monkeypatch,
+        {("NIFTY", "NSE_INDEX"): {prev: 1.0, today: 1.0}, ("ABC", "NSE"): abc},
+    )
+    monkeypatch.setattr(svc, "_market_is_open", lambda now=None: open_now)
+    monkeypatch.setattr(svc, "datetime", type("D", (datetime,), {"now": classmethod(lambda c, tz=None: datetime.combine(today, datetime.min.time()).replace(hour=11, tzinfo=tz))}))
+    quotes = []
+
+    def fake_quotes(symbols, api_key=None):
+        quotes.append(symbols)
+        return True, {"results": [{"symbol": "ABC", "exchange": "NSE", "data": {"ltp": 120.0}}]}, 200
+
+    import services.quotes_service as qs
+
+    monkeypatch.setattr(qs, "get_multiquotes", fake_quotes)
+    return today, prev, quotes
+
+
+def test_today_is_priced_at_the_live_quote_while_the_market_trades(ledger, monkeypatch):
+    # Kotak daily history has no bar for today intraday: the lot used to be valued
+    # at yesterday's close (105) instead of the live 120.
+    today, prev, quotes = _today_setup(ledger, monkeypatch, open_now=True, bar_for_today=False)
+    ok, body, _ = svc.get_pnl_curve("key", prev.isoformat(), today.isoformat(), "actual_cost")
+    assert ok
+    assert body["data"]["by_strategy"]["S"]["unrealized"][-1] == 200.0  # 10 x (120 - 100)
+    assert quotes == [[{"symbol": "ABC", "exchange": "NSE"}]]
+
+
+def test_a_shut_market_uses_todays_bar_and_asks_for_no_quote(ledger, monkeypatch):
+    today, prev, quotes = _today_setup(ledger, monkeypatch, open_now=False, bar_for_today=True)
+    ok, body, _ = svc.get_pnl_curve("key", prev.isoformat(), today.isoformat(), "actual_cost")
+    assert ok
+    assert body["data"]["by_strategy"]["S"]["unrealized"][-1] == 300.0  # 10 x (130 - 100)
+    assert quotes == []
+
+
+def test_a_shut_market_with_no_bar_for_today_falls_back_to_a_quote(ledger, monkeypatch):
+    today, prev, quotes = _today_setup(ledger, monkeypatch, open_now=False, bar_for_today=False)
+    ok, body, _ = svc.get_pnl_curve("key", prev.isoformat(), today.isoformat(), "actual_cost")
+    assert ok
+    assert body["data"]["by_strategy"]["S"]["unrealized"][-1] == 200.0
+    assert len(quotes) == 1
+
+
 def test_bars_to_closes_reads_both_epoch_conventions():
     midnight_utc = int(datetime(2026, 5, 6, 0, 0, tzinfo=svc.UTC).timestamp())
     previous_evening = int(datetime(2026, 5, 5, 18, 30, tzinfo=svc.UTC).timestamp())

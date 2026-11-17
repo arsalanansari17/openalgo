@@ -12,7 +12,16 @@ verify in production, then PR upstream.
 - **Problem**: acc4 (Kotak) AlgoMirror P&L Plot ended at 27 while the Positions page showed 3,246.75, on expiry day after four carried 17-Nov legs were exited. The 2026-10-27 patch fixed flat carried rows on Positions (and in AlgoMirror's `position_cost_basis.py`), but the curve's `strategy_book_pnl` still skipped every row with quantity 0, so those legs kept Kotak's day-slice P&L.
 - **Fix**: a flagged flat row takes the sum of `today_realized_pnl` over its strategy-book slices (row present, no mismatch, at least one slice, every slice attributed), same rule as `applyCostBasis`. Other flat rows keep the broker's figure.
 - **Fork-only** (P&L Tracker M2M subsystem): no upstream issue.
-- **Verified on**: `test_pnl_tracker_m2m.py` 32 pass locally. **Not deployed** (acc3/acc4/acc5 need the pull; Zerodha rows are never flagged so acc1 is unaffected).
+- **Verified on**: `test_pnl_tracker_m2m.py` 32 pass locally. Commit `e243bba72`, deployed to acc4 only 2026-11-17 15:50 IST (sanity 48 passed / 1 warning / 0 failed). acc3/acc5 have F&O off; acc1 is Zerodha (rows never flagged).
+
+## 2026-11-17 - P&L curve (equity): today's open lots are priced at the live quote, not yesterday's close
+
+- **Files**: `services/pnl_history_service.py` (`_price_today`, called from `get_pnl_curve`), `test/test_pnl_curve_service.py` (3 tests)
+- **Problem**: acc4 equity (EBP + RS rotation) showed a negative unrealized on P&L Analysis while Holdings showed about +9K. The curve reads one close per day and, for a day with no bar, carries the previous close forward (`_close_on`). Kotak daily history has no bar for today while the market trades, so today's open lots were valued at yesterday's close. Replayed on acc4's real ledger (5 open lots, ledger complete) with the bot's daily closes: +9,042 with 17-Nov's close, -372 without it.
+- **Fix**: when the range ends today, every instrument still held is priced at its live quote while the market trades; once it is shut only an instrument with no bar for today is (quotes are not trusted after hours, so the bar wins). A quote that cannot be read keeps the old carried-forward close.
+- **Not covered**: whether Kotak's intraday quotes are accurate is still the open item of 2026-10-24 (`TODO.md`). The curve's earlier days still use daily bars.
+- **Fork-only** (P&L Curve subsystem): no upstream issue.
+- **Verified on**: 86 tests pass (`test_pnl_curve_service`, `test_pnl_curve`, `test_pnl_unrealized_pricing`, `test_pnl_history_fallback`, `test_pnl_tracker_m2m`). Deployment recorded below once done.
 
 ## 2026-11-16 - acc2 archived: ledger served by a read-only OpenAlgo copy on the acc1 VM
 
