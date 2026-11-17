@@ -414,6 +414,30 @@ def test_strategy_book_pnl_replaces_the_carry_valuation_pnl():
     assert round(sum(out.values()), 2) == 2160.6
 
 
+def test_strategy_book_pnl_takes_realized_for_a_carried_leg_closed_today():
+    # acc4, 2026-11-17: expiry-day exits of carried legs. Kotak's own pnl is only
+    # that day's slice; the Positions page shows what the strategies realized.
+    from services.pnl_tracker_m2m import strategy_book_pnl
+
+    flat = {
+        "symbol": "S",
+        "exchange": "NFO",
+        "product": "NRML",
+        "quantity": 0,
+        "ltp": 0.05,
+        "pnl": -9587.5,
+        "average_price_basis": "carry_forward_valuation",
+    }
+    out = strategy_book_pnl([flat], [_book_row("S", 0, 0.0, realized=-1234.5)])
+    assert out == {("S", "NFO", "NRML"): -1234.5}
+    # unattributed, mismatched or absent book rows keep Kotak's figure
+    unattributed = _book_row("S", 0, 0.0, realized=5.0)
+    unattributed["slices"][0]["attributed"] = False
+    assert strategy_book_pnl([flat], [unattributed]) == {}
+    assert strategy_book_pnl([flat], [dict(_book_row("S", 0, 0.0, 5.0), mismatch=True)]) == {}
+    assert strategy_book_pnl([flat], []) == {}
+
+
 def test_strategy_book_pnl_leaves_unexplained_rows_alone():
     from services.pnl_tracker_m2m import strategy_book_pnl
 

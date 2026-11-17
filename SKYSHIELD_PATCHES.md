@@ -6,6 +6,14 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-11-17 - P&L Tracker curve (P&L basis): a carried Kotak leg exited today ends on the strategy book's realized P&L
+
+- **Files**: `services/pnl_tracker_m2m.py` (`strategy_book_pnl`), `test/test_pnl_tracker_m2m.py`
+- **Problem**: acc4 (Kotak) AlgoMirror P&L Plot ended at 27 while the Positions page showed 3,246.75, on expiry day after four carried 17-Nov legs were exited. The 2026-10-27 patch fixed flat carried rows on Positions (and in AlgoMirror's `position_cost_basis.py`), but the curve's `strategy_book_pnl` still skipped every row with quantity 0, so those legs kept Kotak's day-slice P&L.
+- **Fix**: a flagged flat row takes the sum of `today_realized_pnl` over its strategy-book slices (row present, no mismatch, at least one slice, every slice attributed), same rule as `applyCostBasis`. Other flat rows keep the broker's figure.
+- **Fork-only** (P&L Tracker M2M subsystem): no upstream issue.
+- **Verified on**: `test_pnl_tracker_m2m.py` 32 pass locally. **Not deployed** (acc3/acc4/acc5 need the pull; Zerodha rows are never flagged so acc1 is unaffected).
+
 ## 2026-11-16 - acc2 archived: ledger served by a read-only OpenAlgo copy on the acc1 VM
 
 - **Files**: no OpenAlgo source change. New on acc1: `/var/python/openalgo-archive-acc2/openalgo/` (code from `09708cf8d` via `git archive`, acc2's `db/openalgo.db` + `db/tradebook.db` copied with the SQLite backup API, acc2's `.env` with ports changed), `/etc/systemd/system/openalgo-archive-acc2.service` (127.0.0.1:5001, eventlet, `MemoryMax=700M`, starts with acc1, shares acc1's venv). AlgoMirror's acc2 account `host_url` is now `http://127.0.0.1:5001` (DB backup `/var/tmp/algomirror-bak-20261113/algomirror.db.pre-acc2-archive`).

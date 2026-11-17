@@ -79,9 +79,15 @@ def strategy_book_pnl(
         if pos.get("average_price_basis") != CARRY_FORWARD_BASIS:
             continue
         qty = _f(pos.get("quantity"))
-        if qty == 0:
-            continue
         row = by_key.get(_key(pos))
+        if qty == 0:
+            # A carried leg that was exited today: Kotak reports only that day's
+            # slice, so take what the strategies realized on it (same rule as
+            # `_apply_closed_row` in AlgoMirror and `applyCostBasis` on Positions).
+            closed = (row or {}).get("slices") or []
+            if row and not row.get("mismatch") and closed and all(s.get("attributed") for s in closed):
+                out[_key(pos)] = round(sum(_f(s.get("today_realized_pnl")) for s in closed), 2)
+            continue
         if not row or row.get("mismatch"):
             continue
         slices = row.get("slices") or []
