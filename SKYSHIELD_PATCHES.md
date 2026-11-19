@@ -23,7 +23,8 @@ verify in production, then PR upstream.
 - **Data repair**: acc1 `algomirror.db` backed up to `/var/tmp/algomirror-bak-20261119/`, filler run by hand (`fill_prices.py --now`): 20 symbols ok, 18th and 19th stored, the 17th corrected.
 - **Still open**: a store nobody asks about for more than 5 days still lags until a page asks again; there is no alert when a fill stores nothing (AlgoMirror has no Telegram channel); the strategy book's entry price for WELSPUNLIV on acc3 (167.87 against Kotak's 256.17) is wrong and feeds the Open Positions table.
 - **Fork-only** (P&L Curve subsystem): no upstream issue.
-- **Verified on**: 87 OpenAlgo tests, 27 AlgoMirror tests; live acc3 `/pnl/curve` after the store refill ends 2026-11-19 with the replayed figures.
+- **Verified on**: 87 OpenAlgo tests, 27 AlgoMirror tests; live `/pnl/curve` after the store refill ends 2026-11-19 on acc1, acc3, acc4, acc5 (last-day unrealized: acc3 5,803 = EBP 8,905 + RS -3,102; acc4 13,452; acc5 9,365; acc1 2,523). **Deployed 2026-11-19 evening** at `93b1d9496` to acc4, acc3, acc5 (sanity 47/27/27 passed, 0 failed) and acc1 (no sanity: bot disabled); AlgoMirror `38dbc5e` copied to acc1 (files, not git: its working tree is the committed content of later commits, HEAD still `989a6de`; backups in `/var/tmp/algomirror-bak-20261119/`).
+- **Found while checking**: acc3's strategy book holds stale legs never closed (EBP WELSPUNLIV 808 @167.87 since 2026-08-17 beside the real RS 332 @256.12, PTCIL, WELCORP -58, expired option legs from Sep/Oct), so the Open Positions table attributes the 332 to the stale leg. Not repaired. The acc1 AlgoMirror git config line `core.filemode` was overwritten by a mistyped diagnostic and restored to `true`.
 
 ## 2026-11-17 - P&L curve (equity): today's open lots are priced at the live quote, not yesterday's close
 
@@ -32,7 +33,7 @@ verify in production, then PR upstream.
 - **Fix**: when the range ends today, every instrument still held is priced at its live quote while the market trades; once it is shut only an instrument with no bar for today is (quotes are not trusted after hours, so the bar wins). A quote that cannot be read keeps the old carried-forward close.
 - **Not covered**: whether Kotak's intraday quotes are accurate is still the open item of 2026-10-24 (`TODO.md`). The curve's earlier days still use daily bars.
 - **Fork-only** (P&L Curve subsystem): no upstream issue.
-- **Verified on**: 86 tests pass (`test_pnl_curve_service`, `test_pnl_curve`, `test_pnl_unrealized_pricing`, `test_pnl_history_fallback`, `test_pnl_tracker_m2m`). Deployment recorded below once done.
+- **Verified on**: 86 tests pass (`test_pnl_curve_service`, `test_pnl_curve`, `test_pnl_unrealized_pricing`, `test_pnl_history_fallback`, `test_pnl_tracker_m2m`). Deployed 2026-11-17 (`aa9b2090a`) to acc4, acc3, acc5; on acc3/acc5/acc1 it only takes effect with the 2026-11-19 calendar fix above.
 
 ## 2026-11-16 - acc2 archived: ledger served by a read-only OpenAlgo copy on the acc1 VM
 
