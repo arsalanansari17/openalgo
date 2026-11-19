@@ -14,6 +14,17 @@ verify in production, then PR upstream.
 - **Fork-only** (P&L Tracker M2M subsystem): no upstream issue.
 - **Verified on**: `test_pnl_tracker_m2m.py` 32 pass locally. Commit `e243bba72`, deployed to acc4 only 2026-11-17 15:50 IST (sanity 48 passed / 1 warning / 0 failed). acc3/acc5 have F&O off; acc1 is Zerodha (rows never flagged).
 
+## 2026-11-19 - P&L curve (equity): a lagging price source no longer ends the curve before today
+
+- **Files**: `services/pnl_history_service.py` (`get_pnl_curve`: calendar extended through today, `notes.prices_end`), `test/test_pnl_curve_service.py`. AlgoMirror `38dbc5e` (filler + note display).
+- **Problem**: acc3 (also acc5, acc1) read daily closes only from the shared price store (`PNL_HISTORY_FALLBACK_FIRST=1`). The store stopped at 2026-11-17 for two days, so the curve's calendar (taken from the same NIFTY bars) ended on the 17th and the Analysis page showed 2,792 instead of about 5,800 (Equity Breakout +8,905, RS rotation -3,102 at the 19th's close). The 11-17 patch below never ran because it needs the curve's last date to be today.
+- **Why the store lagged** (AlgoMirror, not OpenAlgo): the evening filler topped a symbol up only to the last day a page had asked for; nobody opened a page on the 18th, so the 15:45 run found no work and finished in one second. Its summary line was also lost to a logging error (a dict as the only logging argument). The 17th's value was a provisional close (GABRIEL 1503.0, final 1498.9) that nothing corrected.
+- **Fix here**: when the range reaches today and the source's last index bar is earlier, the weekdays after it up to today stay in the calendar, so `_price_today` prices today from a live quote; if a finished day is missing, `notes.prices_end` names the last day with a bar (AlgoMirror shows a toast). **Fix in AlgoMirror 38dbc5e**: top-ups run to today for any symbol asked about in the last 5 days, the summary line is logged properly (warning when a run has errors), the page shows the note.
+- **Data repair**: acc1 `algomirror.db` backed up to `/var/tmp/algomirror-bak-20261119/`, filler run by hand (`fill_prices.py --now`): 20 symbols ok, 18th and 19th stored, the 17th corrected.
+- **Still open**: a store nobody asks about for more than 5 days still lags until a page asks again; there is no alert when a fill stores nothing (AlgoMirror has no Telegram channel); the strategy book's entry price for WELSPUNLIV on acc3 (167.87 against Kotak's 256.17) is wrong and feeds the Open Positions table.
+- **Fork-only** (P&L Curve subsystem): no upstream issue.
+- **Verified on**: 87 OpenAlgo tests, 27 AlgoMirror tests; live acc3 `/pnl/curve` after the store refill ends 2026-11-19 with the replayed figures.
+
 ## 2026-11-17 - P&L curve (equity): today's open lots are priced at the live quote, not yesterday's close
 
 - **Files**: `services/pnl_history_service.py` (`_price_today`, called from `get_pnl_curve`), `test/test_pnl_curve_service.py` (3 tests)

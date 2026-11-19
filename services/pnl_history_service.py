@@ -1289,6 +1289,24 @@ def get_pnl_curve(
             for d in (lookback_start + timedelta(days=i) for i in range(span))
             if d.weekday() < 5
         ]
+    # A source that lags (acc3 reads the shared price store, which stopped at the
+    # 17th for two days) must not end the curve there: weekdays after its last bar,
+    # up to today, are kept so today can be priced from a live quote. Only when a
+    # finished day is missing is it reported; today's own bar is normally absent
+    # while the market trades.
+    prices_end = None
+    today_ist = datetime.now(_IST).date()
+    if index_closes and end >= today_ist:
+        last_bar = max(index_closes)
+        gap = [
+            d
+            for d in (last_bar + timedelta(days=i) for i in range(1, (today_ist - last_bar).days + 1))
+            if d.weekday() < 5
+        ]
+        if gap:
+            all_days = sorted({*all_days, *gap})
+            if any(d < today_ist for d in gap):
+                prices_end = last_bar
     trading_dates = [d for d in all_days if start <= d <= end]
     prior = [d for d in all_days if d < start]
     base_date = prior[-1] if prior else None
@@ -1308,6 +1326,8 @@ def get_pnl_curve(
     result = build_curve(fills, closes, trading_dates, base_date, basis)
     if calendar_note:
         result["notes"]["calendar"] = calendar_note
+    if prices_end:
+        result["notes"]["prices_end"] = prices_end.isoformat()
     return (
         True,
         {

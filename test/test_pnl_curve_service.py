@@ -169,6 +169,52 @@ def test_today_is_priced_at_the_live_quote_while_the_market_trades(ledger, monke
     assert quotes == [[{"symbol": "ABC", "exchange": "NSE"}]]
 
 
+def test_a_lagging_price_source_does_not_end_the_curve_before_today(ledger, monkeypatch):
+    # acc3, 2026-11-19: the price store held closes only to the 17th, so the curve
+    # ended there and today's lots were valued at the 17th's close.
+    from datetime import timedelta
+
+    today = datetime.now(svc._IST).date()
+    while today.weekday() >= 5:
+        today -= timedelta(days=1)
+    stale = today - timedelta(days=2)
+    while stale.weekday() >= 5:
+        stale -= timedelta(days=1)
+    ledger.add_all(
+        [_row(1, "BUY", 10, 100, datetime.combine(stale, datetime.min.time()).replace(hour=15))]
+    )
+    ledger.commit()
+    _fake_closes(
+        monkeypatch,
+        {("NIFTY", "NSE_INDEX"): {stale: 1.0}, ("ABC", "NSE"): {stale: 105.0}},
+    )
+    monkeypatch.setattr(svc, "_market_is_open", lambda now=None: False)
+    monkeypatch.setattr(
+        svc,
+        "datetime",
+        type("D", (datetime,), {"now": classmethod(lambda c, tz=None: datetime.combine(today, datetime.min.time()).replace(hour=18, tzinfo=tz))}),
+    )
+    import services.quotes_service as qs
+
+    monkeypatch.setattr(
+        qs,
+        "get_multiquotes",
+        lambda symbols, api_key=None: (
+            True,
+            {"results": [{"symbol": "ABC", "exchange": "NSE", "data": {"ltp": 120.0}}]},
+            200,
+        ),
+    )
+
+    ok, body, _ = svc.get_pnl_curve("key", stale.isoformat(), today.isoformat(), "actual_cost")
+
+    assert ok
+    data = body["data"]
+    assert data["dates"][-1] == today.isoformat()
+    assert data["by_strategy"]["S"]["unrealized"][-1] == 200.0  # 10 x (120 - 100)
+    assert data["notes"]["prices_end"] == stale.isoformat()
+
+
 def test_a_shut_market_uses_todays_bar_and_asks_for_no_quote(ledger, monkeypatch):
     today, prev, quotes = _today_setup(ledger, monkeypatch, open_now=False, bar_for_today=True)
     ok, body, _ = svc.get_pnl_curve("key", prev.isoformat(), today.isoformat(), "actual_cost")
