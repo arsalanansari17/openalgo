@@ -1358,8 +1358,8 @@ export class TradingTerminal {
    */
   private alertFacts(event: { time?: number; index?: number; price?: number }): AlertFacts {
     const bars = this.shownBars
-    // On a transformed chart an element's own volume is not traded volume (a
-    // Kagi line keeps its thickness there), so read what the volume bars show.
+    // On a Kagi chart an element's own volume is its line thickness, not traded
+    // volume, so read what the volume bars show on every transformed chart.
     const at = this.withDrawnVolume(
       (typeof event.index === 'number' && event.index >= 0 && event.index < bars.length
         ? bars[event.index]
@@ -1744,9 +1744,10 @@ export class TradingTerminal {
   /**
    * A drawn element with the volume the volume bars show under it.
    *
-   * On a transformed chart an element's own `volume` is not traded volume: a
-   * Kagi line keeps its thickness there (1 or 0) and a brick carries none. The
-   * readout reads the volume summed under the element instead, as it is drawn.
+   * On a Kagi chart an element's own `volume` is not traded volume: the line
+   * keeps its thickness there (1 or 0). Other elements carry their traded volume
+   * since openalgo-charts 2.6.8, but the readout reads the volume summed under
+   * the element on every transformed chart, so it always matches the bars drawn.
    */
   private withDrawnVolume(bar: Bar | null): Bar | null {
     if (!bar || !this.transformed()) return bar
@@ -4571,12 +4572,17 @@ export class TradingTerminal {
       this.applyingIndicators = true
       try {
         if (this.activeIndicators.every((record) => record.paneIndex !== undefined)) {
-          chart.restoreState({
+          const report = chart.restoreState({
             version: 1,
             indicators: this.activeIndicators as IndicatorState[],
             drawings: this.draw?.toJSON() ?? this.drawJson,
             alerts: this.alertJson,
           })
+          // A study that cannot be rebuilt is refused, not thrown, and the
+          // chart is left without it. Failing here keeps the tracked studies:
+          // the sync below would otherwise save the bare chart over them.
+          if (!report.applied)
+            throw new Error(report.reason ?? 'The saved studies could not be applied')
         } else {
           // Legacy duplicate healing happens during migration. Modern templates
           // may intentionally contain identical studies, including a shared pane.

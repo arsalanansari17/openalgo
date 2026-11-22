@@ -1,6 +1,7 @@
 import {
   BarChart3,
   Bell,
+  BellRing,
   BookOpen,
   Bot,
   Boxes,
@@ -17,8 +18,6 @@ import {
   Layers,
   LayoutDashboard,
   type LucideIcon,
-  MessageCircle,
-  MessageSquare,
   PieChart,
   Search,
   Settings,
@@ -110,8 +109,9 @@ export const profileMenuItems: NavItem[] = [
   // menu holding one.
   { href: '/agent', label: 'Agent', icon: Bot },
   { href: '/master-contract', label: 'Master Contract', icon: FileStack },
-  { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
-  { href: '/whatsapp', label: 'WhatsApp Bot', icon: MessageCircle },
+  // One entry for every alert channel. /alerts links to the Telegram,
+  // WhatsApp, Slack and Discord pages, so none needs an entry of its own.
+  { href: '/alerts', label: 'Alerts', icon: BellRing },
   { href: '/holdings', label: 'Holdings', icon: ClipboardList },
   { href: '/flow', label: 'Flow Editor', icon: Workflow },
   { href: '/scalping', label: 'Scalping', icon: Zap },

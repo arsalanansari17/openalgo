@@ -6,6 +6,15 @@ verify in production, then PR upstream.
 
 ---
 
+## 2026-11-22 - Upstream sync: origin/main 2.0.3.5 merged into fork main (local, not yet deployed)
+
+- **Files**: merge of `origin/main` (`c8b2896ca`, 153 commits since `2b52f4661`) into `main`. Hand-resolved: `broker/kotak/mapping/margin_data.py`, `frontend/src/pages/PnLTracker.tsx` (+ test), `frontend/src/config/navigation.ts`; added `database/latency_groups.py` (`PNL_HISTORY` endpoint), `frontend/package.json` (`lightweight-charts`), `frontend/src/pages/PnLTrackerBasis.test.tsx`; `frontend/dist` rebuilt.
+- **Conflicts**: 5 files conflicted as whole-file only because our blobs had CRLF and upstream's LF (`kotak/mapping/order_data.py`, `zerodha_websocket.py`, `auth_db.py`, `latency_monitor.py`, `margin_data.py`); a three-way `git merge-file` on LF-normalised versions merged four cleanly. `margin_data.py`: took upstream's `ordMrgn` handling (it replaces our `ordMrgn`-over-`reqdMrgn` patch; a missing `ordMrgn` is now an error, not a fallback to `reqdMrgn`). `PnLTracker.tsx`: upstream moved the chart to `openalgo-charts`; kept our P&L | M2M basis switch on top of it and dropped the old theme re-init effect. `navigation.ts`: kept only `PieChart`.
+- **Upstream now carries**: Kotak carried cash leg cost from Holdings `averagePrice`, average rounded to the row's `precision`, holdings matched on `exchangeIdentifier` (overlaps our carried-leg patches, review on acc3/acc4/acc5 Positions after deploy). openalgo SDK 2.0.5 -> 2.4.0 in `requirements-nginx.txt`.
+- **Fork-only code kept**: eventlet #1421 `_real_threading` in `zerodha_websocket.py`/`kotak_adapter.py` (marker counts equal to `main`), INDIAVIX handling, P&L History.
+- **New dependency**: `lightweight-charts` is used by our `components/pnl/*` charts but upstream removed it from `package.json`; re-added.
+- **Verified on**: 859 broker/P&L/margin/holdings/latency tests pass locally (54 files); `tsc -b` clean; P&L tracker vitest 14 pass. Not run: full pytest (hangs in a zmq teardown on Windows), `test_position_read_failure.py` (upstream `KeyError: 'sahi'` at collection), one clock-dependent sandbox test.
+
 ## 2026-11-17 - P&L Tracker curve (P&L basis): a carried Kotak leg exited today ends on the strategy book's realized P&L
 
 - **Files**: `services/pnl_tracker_m2m.py` (`strategy_book_pnl`), `test/test_pnl_tracker_m2m.py`
